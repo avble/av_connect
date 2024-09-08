@@ -1,5 +1,5 @@
-# avb_http
-A mini C++ http server backed by I/O event libraries: libevent, 
+# av_http
+A mini C++ http server backed by I/O event libraries: [libevent](https://github.com/libevent/libevent) 
 
 It is much ease of use and more flexible comparing samples provided by each I/O event library.
 
