@@ -118,7 +118,7 @@ public:
 
     ~request()
     {
-        if (is_owning)
+        if (is_owning and req != NULL)
             evhttp_request_free(req);
     }
 
@@ -378,8 +378,8 @@ void write_async(evhttp_connection * evcon, status_code _code, on_write_func && 
     bufferevent_setcb(evcon->bufev, NULL, /*read*/
                       write_cb, eventcb_ptr, new bufev_cb_obj(std::move(complete_func_)));
 
-    bufferevent_disable(evcon->bufev, EV_READ);
-    bufferevent_enable(evcon->bufev, EV_WRITE);
+    // bufferevent_disable(evcon->bufev, EV_READ);
+    bufferevent_enable(evcon->bufev, EV_WRITE | EV_READ);
 }
 
 void write_async(evhttp_connection * evcon, response res)
@@ -486,7 +486,8 @@ void start_server(unsigned short port, std::function<void(response)> && route_hd
 
     if (NULL != make_listener(port, on_accept))
     {
-        std::cout << "server has started on port: " << port << std::endl;
+        std::cout << "server has started on port: " << port << " using " << event_base_get_method(Event::event_base_global())
+                  << std::endl;
         Event::run_forever();
     }
     else
