@@ -77,10 +77,10 @@ $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
 
 | http server | Request per second | Remark |
 |----|----|---|
-| av_http  |      53K rps      |  release-0.0.2 |
-| nodejs   |    12K rps  | v12.22.9 |
-| asiohttp | 11k rps | 3.10.6 |
-| flask   | 697 rps | 3.0.3 |
+| av_http  |      ~75,000 rps      |  release-0.0.2 |
+| nodejs   |    ~12,000 rps  | v12.22.9 |
+| asiohttp | ~11,000 rps | 3.10.6 |
+| flask   | ~697 rps | 3.0.3 |
 
 
 Comparing with other http framework, which is found at [here](https://github.com/avble/av_http/example/performance)
