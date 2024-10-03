@@ -28,14 +28,15 @@ int main(int argc, char * args[])
     }
 
     // {
-
     //     std::unordered_map<std::string, std::function<void(http::response)>> routes;
 
     //     routes["/route_01"] = [](http::response res) {
+    //         // std::cout << "[DEBUG] /route_01 is called." << std::endl;
     //         res.body() = "hello from route_01";
     //         res.send();
     //     };
     //     routes["/route_02"] = [](http::response res) {
+    //         // std::cout << "[DEBUG] /route_02 is called." << std::endl;
     //         res.body() = "hello from route_02";
     //         res.send();
     //     };

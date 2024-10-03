@@ -26,8 +26,6 @@ extern "C" {
 class Event
 {
 public:
-    ///////////////////////////////////////////////////////////////////////
-    // Schedule a callback
     static int run_forever() { return event_base_dispatch(Event::event_base_global()); }
 
     // static int stop() { event_del(Event::event_base_global()); }
@@ -35,32 +33,35 @@ public:
     ///////////////////////////////////////////////////////////////////////
     // Schedule a callback
     template <class F, class... Args>
-    static void call_soon(F f, Args... args)
+    static void call_soon(F f, Args &&... args)
     {
         struct wrapper
         {
-            wrapper(F func_, Args... args) : func(std::bind(func_, args...)) {}
+            // wrapper(F func_, Args &&... args) : func(std::bind(func_, args...)) {}
+            wrapper(std::function<void()> func_) {}
 
-            void operator()() { func(); }
+            // void operator()() { func(); }
 
             std::function<void()> func;
         };
 
         auto event_base_once_cb = [](evutil_socket_t fd, short what, void * ptr) {
             wrapper * p = (wrapper *) ptr;
-            (*p)();
+            // (*p)();
             delete p;
         };
 
-        event_base_once(Event::event_base_global(), -1, EV_TIMEOUT, event_base_once_cb, new wrapper(std::move(f), args...), NULL);
+        // event_base_once(Event::event_base_global(), -1, EV_TIMEOUT, event_base_once_cb,
+        //                 new wrapper(std::move(f), std::forward<Args>(args)...), NULL);
+        event_base_once(Event::event_base_global(), -1, EV_TIMEOUT, event_base_once_cb, new wrapper(std::bind(f, args...)), NULL);
     }
 
-    template <class F, class... Args>
-    static void call_soon_threadsafe(F && f, Args... args)
-    {
-        std::lock_guard lock(Event::event_mutex_);
-        call_soon(std::bind(f, args...));
-    }
+    // template <class F, class... Args>
+    // static void call_soon_threadsafe(F && f, Args... args)
+    // {
+    //     std::lock_guard lock(Event::event_mutex_);
+    //     call_soon(std::bind(f, args...));
+    // }
 
     template <class F, class... Args>
     static void call_later(std::chrono::seconds delay, F && f, Args... args)
