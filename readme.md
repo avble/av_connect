@@ -65,10 +65,9 @@ And it varies from the hardward and OS. THe performance is measured on environme
 * OS: Linux 5.15.153.1-microsoft-standard-WSL2
 * Hardware: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz
 
-The ab tool is used to measure the performance. It is also understood that the evaluation result may vary on the environment (OS and hardware). 
+The ab tool is used to measure the performance.
 
 ## Request per second
-This criteria is to measure the responsive of a http server.
 It is tested by 50 concurrency active connection and 100,000 request in total.
 ``` shell
 $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
@@ -86,9 +85,8 @@ $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
 Comparing with other http framework, which is found at [here](https://github.com/avble/av_http/example/performance)
 
 ## Concurrency Capacity
-Concurrency is one of important criteria of measuring http's performance. 
-This experimental result is conducted base on environment
 
+Below ab command is for testing performance.
 ``` shell
 $ ab -k -c 1000 -n 1000000 127.0.0.1:12345/route_01
 ```
