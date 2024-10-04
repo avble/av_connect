@@ -99,8 +99,6 @@ $ ab -k -c 1000 -n 1000000 127.0.0.1:12345/route_01
 | av_http | 15,000 | ~102,000 rps | release-0.0.3 |
 | av_http | 20,000 | ~90,000 rps | release-0.0.3 |
 
-
-
-
-
-
+# Reference
+* HTTP/1.0 https://datatracker.ietf.org/doc/html/rfc1945
+* HTTP/1.1 https://datatracker.ietf.org/doc/html/rfc2616

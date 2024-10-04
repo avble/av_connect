@@ -37,31 +37,29 @@ public:
     {
         struct wrapper
         {
-            // wrapper(F func_, Args &&... args) : func(std::bind(func_, args...)) {}
-            wrapper(std::function<void()> func_) {}
+            wrapper(F func_, Args &&... args) : func(std::bind(func_, args...)) {}
 
-            // void operator()() { func(); }
+            void operator()() { func(); }
 
             std::function<void()> func;
         };
 
         auto event_base_once_cb = [](evutil_socket_t fd, short what, void * ptr) {
             wrapper * p = (wrapper *) ptr;
-            // (*p)();
+            (*p)();
             delete p;
         };
 
-        // event_base_once(Event::event_base_global(), -1, EV_TIMEOUT, event_base_once_cb,
-        //                 new wrapper(std::move(f), std::forward<Args>(args)...), NULL);
-        event_base_once(Event::event_base_global(), -1, EV_TIMEOUT, event_base_once_cb, new wrapper(std::bind(f, args...)), NULL);
+        event_base_once(Event::event_base_global(), -1, EV_TIMEOUT, event_base_once_cb,
+                        new wrapper(std::move(f), std::forward<Args>(args)...), NULL);
     }
 
-    // template <class F, class... Args>
-    // static void call_soon_threadsafe(F && f, Args... args)
-    // {
-    //     std::lock_guard lock(Event::event_mutex_);
-    //     call_soon(std::bind(f, args...));
-    // }
+    template <class F, class... Args>
+    static void call_soon_threadsafe(F && f, Args... args)
+    {
+        std::lock_guard lock(Event::event_mutex_);
+        call_soon(std::bind(f, args...));
+    }
 
     template <class F, class... Args>
     static void call_later(std::chrono::seconds delay, F && f, Args... args)

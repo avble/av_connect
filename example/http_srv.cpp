@@ -19,35 +19,35 @@ int main(int argc, char * args[])
     std::string addr(args[1]);
     uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
 
-    {
-        http::start_server(port, [](http::response res) {
-            // std::cout << "[DEBUG][http::start_server] is called.\n";
-            res.body() = "hello world";
-            res.send();
-        });
-    }
-
     // {
-    //     std::unordered_map<std::string, std::function<void(http::response)>> routes;
-
-    //     routes["/route_01"] = [](http::response res) {
-    //         // std::cout << "[DEBUG] /route_01 is called." << std::endl;
-    //         res.body() = "hello from route_01";
+    //     http::start_server(port, [](http::response res) {
+    //         // std::cout << "[DEBUG][http::start_server] is called.\n";
+    //         res.body() = "hello world";
     //         res.send();
-    //     };
-    //     routes["/route_02"] = [](http::response res) {
-    //         // std::cout << "[DEBUG] /route_02 is called." << std::endl;
-    //         res.body() = "hello from route_02";
-    //         res.send();
-    //     };
-
-    //     auto route_handler = [&routes](http::response res) {
-    //         if (auto route_ = routes[res.reqwest().get_uri_path()])
-    //             route_(std::move(res));
-    //         else
-    //             res.send();
-    //     };
-
-    //     http::start_server(port, route_handler);
+    //     });
     // }
+
+    {
+        std::unordered_map<std::string, std::function<void(http::response)>> routes;
+
+        routes["/route_01"] = [](http::response res) {
+            // std::cout << "[DEBUG] /route_01 is called." << std::endl;
+            res.body() = "hello from route_01";
+            res.send();
+        };
+        routes["/route_02"] = [](http::response res) {
+            // std::cout << "[DEBUG] /route_02 is called." << std::endl;
+            res.body() = "hello from route_02";
+            res.send();
+        };
+
+        auto route_handler = [&routes](http::response res) {
+            if (auto route_ = routes[res.reqwest().get_uri_path()])
+                route_(std::move(res));
+            else
+                res.send();
+        };
+
+        http::start_server(port, route_handler);
+    }
 }
