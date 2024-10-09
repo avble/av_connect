@@ -1,9 +1,28 @@
-# av_http
-A mini C++ http server backed by I/O event libraries: [libevent](https://github.com/libevent/libevent) 
+# Overview
+A collection of networking stuff for making network (client/server) application.
 
-It is a fun project, creating a http server from scratch. 
+# compilation and run
+The program has been tested under the `Linux 5.15.153.1-microsoft-standard-WSL2`
+``` shell
+$ mkdir build && cd build && cmake ..
+$ make        # complation
+$ ./example/http_srv  # run server
+```
 
-# [http server](https://github.com/avble/av_http/)
+## dependencies
+* http_parser
+* boost
+
+``` shell 
+sudo apt install libhttp-parser-dev libboost-dev
+```
+
+# http
+I have done couple of experimental results, (libevent-http_parser)[https://github.com/avble/libevent-cpp-samples/tree/main/http], (libuv-http_parser)[https://github.com/avble/http_parser-libuv], asio-http_parser. 
+
+All of them are performant, and I have decided to select asio as IO event and http-parser as parsing http request. 
+
+## [http server example](https://github.com/avble/av_connect/example)
 
 you can quick start creating a http server by the below source code.
 
@@ -19,46 +38,32 @@ int main(int argc, char ** argv)
 }
 ```
 
-Or you can start writing a simple router which is to dispatch your request to appropriate handler.
-As below exapmle, two route handler are created, /route_01 and /route_02
+# websocket echo server
 
-```cpp
-int main(int argc, char ** argv)
+``` cpp
+int main(int argc, char * args[])
 {
-    std::string addr = "127.0.0.1";
-    uint16_t port    = 12345;
-    std::unordered_map<std::string, std::function<void(http::response)>> routes;
+    if (argc != 3)
+    {
+        std::cerr << "\nUsage: " << args[0] << " address port\n" << "Example: \n" << args[0] << " 0.0.0.0 12345" << std::endl;
+        return -1;
+    }
 
-    routes["/route_01"] = [](http::response res) {
-        res.body() = "hello from route_01";
-        res.send();
-    };
-    routes["/route_02"] = [](http::response res) {
-        res.body() = "hello from route_02";
-        res.send();
-    };
+    std::string addr(args[1]);
+    uint16_t port   = static_cast<uint16_t>(std::atoi(args[2]));
+    auto ws_server_ = ws::make_server(
+        port,
+        [](ws::message msg) {
+            msg.data_out() << "Echo: " << msg.data();
+            msg.send();
+        },
+        [](beast::error_code ec) {});
 
-    auto route_handler = [&routes](http::response res) {
-        if (auto route_ = routes[res.reqwest().get_uri_path()])
-            route_(std::move(res));
-        else
-            res.send();
-    };
-
-    http::start_server(port, route_handler);
+    io_context::ioc.run();
 }
-
 ```
 
-## compilation and run
-The program has been tested under the `Linux 5.15.153.1-microsoft-standard-WSL2`
-``` shell
-$ mkdir build && cd build && cmake ..
-$ make        # complation
-$ ./example/http_srv  # run server
-```
-
-# Performance
+## Performance
 There are several criterias for measuring the performance of a http server.
 
 And it varies from the hardward and OS. THe performance is measured on environment:
@@ -67,16 +72,15 @@ And it varies from the hardward and OS. THe performance is measured on environme
 
 The ab tool is used to measure the performance.
 
-## Request per second
+### Request per second
 It is tested by 50 concurrency active connection and 100,000 request in total.
 ``` shell
 $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
 ```
 
-
 | http server | Request per second | Remark |
 |----|----|---|
-| av_http  |      ~155,000 rps      |  release-0.0.3 |
+| av_connect  |      ~220,000 rps      |  release-0.0.4 |
 | nodejs   |    ~12,000 rps  | v12.22.9 |
 | asiohttp | ~11,000 rps | 3.10.6 |
 | flask   | ~697 rps | 3.0.3 |
@@ -84,20 +88,10 @@ $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
 
 Comparing with other http framework, which is found at [here](https://github.com/avble/av_http/example/performance)
 
-## Concurrency Capacity
+# its application
+* 
+* 
 
-Below ab command is for testing performance.
-``` shell
-$ ab -k -c 1000 -n 1000000 127.0.0.1:12345/route_01
-```
-
-|server | Concurrency Level | Request per second | Remark |
-|----|----|---|---|
-| av_http | 1,000 | ~146,000 rps | release-0.0.3 |
-| av_http | 5,000 | ~124,000 rps | release-0.0.3 |
-| av_http | 10,000 | ~119,000 rps | release-0.0.3 |
-| av_http | 15,000 | ~102,000 rps | release-0.0.3 |
-| av_http | 20,000 | ~90,000 rps | release-0.0.3 |
 
 # Reference
 * HTTP/1.0 https://datatracker.ietf.org/doc/html/rfc1945

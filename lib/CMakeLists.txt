@@ -1,9 +1,23 @@
-add_library(av_http INTERFACE)
+option(AV_CONNECT_DISABLE_WS "Disable websocket" OFF)
 
-target_sources(av_http PUBLIC event.hpp http.hpp internal/base.hpp)
+add_library(av_connect STATIC)
 
-target_include_directories(av_http INTERFACE ${libevent_SOURCE_DIR})
+set(av_connect_FILES io_base.cpp)
+# http
+list(APPEND av_connect_FILES llhttp/api.c)
+list(APPEND av_connect_FILES llhttp/http.c)
+list(APPEND av_connect_FILES llhttp/llhttp.c)
 
-target_include_directories(av_http INTERFACE ${llhttp_SOURCE_DIR}/include)
+set(av_connect_include_dir ./)
+list(APPEND av_connect_include_dir ${libevent_SOURCE_DIR})
+list(APPEND av_connect_include_dir ${llhttp_SOURCE_DIR}/include)
 
-target_link_libraries(av_http INTERFACE llhttp_static event_static event_core_static)
+set(av_connect_dependent_libs )
+
+find_package(PkgConfig)
+pkg_check_modules(http_parser REQUIRED)
+list(APPEND av_connect_dependent_libs  http_parser)
+
+target_include_directories(av_connect PUBLIC ${av_connect_include_dir})
+target_link_libraries(av_connect PUBLIC ${av_connect_dependent_libs})
+target_sources(av_connect PUBLIC ${av_connect_FILES})

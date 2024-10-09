@@ -1,27 +1,27 @@
-/* Copyright (c) 2024-2024 Harry Le (avble.harry at gmail dot com)
+#include "io_base.hpp"
 
-It can be used, modified.
-*/
+#include <http_parser.h>
 
-#pragma once
-#include "llhttp.h"
-
-#include "event.hpp"
-#include "internal/base.hpp"
-
+#include <algorithm>
+#include <boost/asio.hpp>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <tuple>
+#include <unistd.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <sys/queue.h>
 
-using namespace std::placeholders;
+using boost::asio::ip::tcp;
 
 namespace http {
 
@@ -63,6 +63,16 @@ std::string make_status_line(status_code code, std::string msg = "")
     return status_line;
 }
 
+inline int http_parser_get_major(http_parser * parser)
+{
+    return parser->http_major;
+}
+
+inline int http_parser_get_minor(http_parser * parser)
+{
+    return parser->http_minor;
+}
+
 class request
 {
 public:
@@ -84,11 +94,11 @@ public:
         // req             = other.req;
     }
 
-    request(llhttp_t * parser, std::string _uri_path)
+    template <class T>
+    request(T parser)
     {
-        major    = llhttp_get_http_major(parser);
-        minor    = llhttp_get_http_minor(parser);
-        uri_path = _uri_path;
+        major = http_parser_get_major(parser);
+        minor = http_parser_get_minor(parser);
     }
 
     const std::string & get_uri_path() { return uri_path; }
@@ -113,8 +123,7 @@ class response
         base() {};
         base(const base & other) = delete;
 
-        virtual void do_write_response()         = 0;
-        virtual evbuffer * evbuffer_get_output() = 0;
+        virtual void do_write_response(response) = 0;
         virtual ~base() {}
     };
 
@@ -126,25 +135,14 @@ class response
 
         wrapper(wrapper && other) { p = other.p; }
         wrapper(std::weak_ptr<T> p_) { p = p_; }
-        // wrapper(const wrapper & other) { p = other.p; }
 
-        void do_write_response()
+        void do_write_response(response res)
         {
             if (auto w_p = p.lock())
             {
-                w_p->do_write_response();
+                w_p->do_write_response(std::move(res));
             }
         }
-        evbuffer * evbuffer_get_output()
-        {
-            if (auto w_p = p.lock())
-            {
-                return w_p->get_output_buffer();
-            }
-
-            return NULL;
-        }
-
         ~wrapper() {}
 
         std::weak_ptr<T> p;
@@ -154,7 +152,6 @@ public:
     response()                              = delete;
     response & operator=(response & other)  = delete;
     response & operator=(response && other) = delete;
-    response(const response & other)        = delete;
 
     template <class T>
     response(std::weak_ptr<T> connect_, request && req_) : req(std::move(req_))
@@ -171,11 +168,10 @@ public:
     response(response && other) : req(std::move(other.req)), base_(other.base_)
     {
         // std::cout << "[DEBUG][response] is called. with body: " << other.body_ << std::endl;
-        result_  = other.result_;
-        headers_ = std::move(other.headers_);
-        major    = other.major;
-        minor    = other.minor;
-        // write_response  = std::move(other.write_response);
+        result_         = other.result_;
+        headers_        = std::move(other.headers_);
+        major           = other.major;
+        minor           = other.minor;
         body_           = std::move(other.body_);
         is_owning       = other.is_owning;
         other.is_owning = false;
@@ -189,25 +185,9 @@ public:
 
     void send()
     {
-        // std::cout << "[DEBUG][send] is called. with body: " << body_ << std::endl;
         if (is_owning)
         {
-            std::string header = "HTTP/1.0 200 OK";
-            header += "\n";
-            header += "Connection: keep-alive";
-            header += "\n";
-            header += "Content-Length: ";
-            header += std::to_string(body_.size());
-            header += "\r\n\r\n";
-            evbuffer * output = base_->evbuffer_get_output();
-
-            if (output != NULL)
-            {
-                evbuffer_add(output, header.data(), header.size());
-                evbuffer_add(output, body_.c_str(), body_.size());
-            }
-
-            base_->do_write_response();
+            base_->do_write_response(*this);
         }
         is_owning = false;
     }
@@ -221,7 +201,17 @@ public:
     }
 
 private:
-    response(response & other) = delete;
+    response(response & other) : req(std::move(other.req)), base_(other.base_)
+    {
+
+        result_         = other.result_;
+        headers_        = std::move(other.headers_);
+        major           = other.major;
+        minor           = other.minor;
+        body_           = std::move(other.body_);
+        is_owning       = other.is_owning;
+        other.is_owning = false;
+    }
 
     bool is_owning;
     request req;
@@ -232,196 +222,157 @@ private:
     bool is_keep_alive;
 
     std::string body_;
-
     base * base_;
 };
 
-void start_server(unsigned short port, std::function<void(response)> _handler)
+class session : public std::enable_shared_from_this<session>
 {
-
-    class http_session : public std::enable_shared_from_this<http_session>
+    struct internal_wrapper
     {
-        struct internal_wrapper
-        {
-            internal_wrapper(std::shared_ptr<http_session> _p) { p_session = _p; }
+        internal_wrapper(std::shared_ptr<session> _p) { p_session = _p; }
 
-            internal_wrapper(const internal_wrapper & other) { p_session = other.p_session; }
+        internal_wrapper(const internal_wrapper & other) { p_session = other.p_session; }
 
-            std::shared_ptr<http_session> p_session;
+        std::shared_ptr<session> p_session;
+    };
+
+    enum
+    {
+        max_length = 102400
+    };
+
+public:
+    session(tcp::socket socket, std::function<void(response)> _handler) : socket_(std::move(socket)), handler(_handler)
+    {
+        data_len = 0;
+        std::memset(&settings, 0, sizeof settings);
+    }
+
+    void start()
+    {
+        static http_cb llhttp_on_message = [](http_parser * _http_parser) -> int {
+            internal_wrapper * wrapper_ = (internal_wrapper *) _http_parser->data;
+            auto self                   = wrapper_->p_session;
+
+            self->on_read(_http_parser);
+
+            return 0;
         };
 
-    public:
-        http_session(int fd, std::function<void(response)> _handler) : handler(_handler)
-        {
-            bev = bufferevent_socket_new(Event::event_base_global(), fd, BEV_OPT_CLOSE_ON_FREE);
-        }
+        http_parser_init(&parser, HTTP_BOTH);
+        settings.on_message_complete = llhttp_on_message;
 
-        ~http_session() { bufferevent_free(bev); }
+        parser.data = new internal_wrapper(shared_from_this());
 
-        void start() { do_read_request(); }
-
-    private:
-        http_session()                                  = delete;
-        http_session(const http_session &)              = delete;
-        http_session(const http_session &&)             = delete;
-        http_session & operator=(const http_session &)  = delete;
-        http_session & operator=(const http_session &&) = delete;
-
-    public:
-        void do_read_request()
-        {
-            // std::cout << "[do_read_request] ENTER \n";
-
-            static llhttp_cb llhttp_on_message = [](llhttp_t * _req) -> int {
-                internal_wrapper * wrapper_ = (internal_wrapper *) _req->data;
-                auto self                   = wrapper_->p_session;
-
-                self->on_read_complete(_req);
-
-                evbuffer * input = bufferevent_get_input(self->bev);
-                evbuffer_drain(input, evbuffer_get_length(input));
-
-                return 0;
-            };
-
-            static llhttp_data_cb llhttp_on_url = [](llhttp_t * _req, const char * at, size_t length) -> int {
-                internal_wrapper * wrapper_ = (internal_wrapper *) _req->data;
-                auto self                   = wrapper_->p_session;
-
-                self->uri_path = std::string(at, length);
-
-                return 0;
-            };
-
-            static bufferevent_data_cb bev_read_cb = [](bufferevent * bev, void * arg) {
-                evbuffer * input = bufferevent_get_input(bev);
-                int buff_len     = evbuffer_get_length(input);
-                char * buff      = (char *) malloc(buff_len);
-
-                llhttp_t parser;
-                llhttp_settings_t settings;
-
-                /*Initialize user callbacks and settings */
-                llhttp_settings_init(&settings);
-
-                /*Set user callback */
-                settings.on_message_complete = llhttp_on_message;
-                settings.on_url              = llhttp_on_url;
-
-                llhttp_init(&parser, HTTP_BOTH, &settings);
-                parser.data = arg;
-
-                /*Parse request! */
-                evbuffer_copyout(input, buff, buff_len);
-
-                enum llhttp_errno err = llhttp_execute(&parser, buff, buff_len);
-                if (err == HPE_OK)
-                {
-                }
-                free(buff);
-            };
-
-            static bufferevent_event_cb bev_err_cb = [](struct bufferevent * bev, short what, void * ctx) {
-                // std::cout << "[bev_err_cb] ENTER what " << what << std::endl;
-                void * arg = NULL;
-                bufferevent_getcb(bev, NULL, NULL, NULL, &arg);
-                internal_wrapper * wrapper_ = (internal_wrapper *) arg;
-                delete wrapper_;
-            };
-
-            void * arg = NULL;
-            bufferevent_getcb(bev, NULL, NULL, NULL, &arg);
-            arg = arg != NULL ? arg : new internal_wrapper(shared_from_this());
-
-            bufferevent_setcb(bev, bev_read_cb, NULL, bev_err_cb, arg);
-
-            bufferevent_enable(bev, EV_READ | EV_WRITE);
-        }
-
-        void on_read_complete(llhttp_t * _req)
-        {
-            response res{ std::weak_ptr<http_session>(shared_from_this()), request{ _req, uri_path } };
-
-            handler(std::move(res));
-        }
-
-        void do_write_response()
-        {
-            auto do_write_async = [self = shared_from_this()]() {
-                static bufferevent_data_cb writecb_ptr = [](bufferevent * bev, void * arg) {
-                    // std::cout << "[writecb_ptr] ENTER \n";
-                    internal_wrapper * wrapper_ = (internal_wrapper *) arg;
-                    auto self                   = wrapper_->p_session;
-                    // evbuffer_drain(bufferevent_get_output(self->bev), evbuffer_get_length(bufferevent_get_output(self->bev)));
-                    self->on_write();
-                };
-
-                bufferevent_event_cb eventcb_ptr = NULL;
-                void * arg;
-                bufferevent_getcb(self->bev, NULL, NULL, &eventcb_ptr, &arg);
-                bufferevent_setcb(self->bev, NULL, writecb_ptr, eventcb_ptr, arg);
-
-                bufferevent_disable(self->bev, EV_READ);
-                bufferevent_enable(self->bev, EV_WRITE);
-            };
-
-            Event::call_soon(do_write_async);
-        }
-
-        void on_write()
-        {
-            // std::cout << "[on_write] ENTER \n";
-            auto do_read = [func_ = std::bind(&http_session::do_read_request, shared_from_this())]() { func_(); };
-            Event::call_soon(do_read);
-        }
-
-    private:
-        evbuffer * get_output_buffer() { return bufferevent_get_output(bev); }
-        std::string uri_path;
-
-    public:
-        bufferevent * bev;
-        std::function<void(response)> handler;
-        friend class response::wrapper<http_session>;
-    };
-
-    static evconnlistener_cb on_accept = [](struct evconnlistener * listener, evutil_socket_t fd, struct sockaddr * sa, int socklen,
-                                            void * arg) {
-        // std::cout << "[DEBUG] on_accept is called.\n";
-
-        std::tuple<std::function<void(response)>> * p = (std::tuple<std::function<void(response)>> *) arg;
-
-        std::shared_ptr<http_session>
-        {
-            new http_session(fd, std::get<0>(*p)), [](http_session * p) {
-                // std::cout << "[DEBUG] http_session is deleted.\n";
-                delete p;
-            }
-        } -> start();
-
-        // delete p;
-    };
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port        = htons(port);
-
-    int flags            = LEV_OPT_CLOSE_ON_FREE | LEV_OPT_CLOSE_ON_EXEC | LEV_OPT_REUSEABLE;
-    struct sockaddr * sa = (struct sockaddr *) &addr;
-
-    evconnlistener * listener = evconnlistener_new_bind(
-        Event::event_base_global(), on_accept, new std::tuple<decltype(_handler)>(_handler), flags, -1, sa, sizeof(sockaddr_in));
-
-    if (listener != NULL)
-    {
-        std::cout << "server has started on port: " << port << " using " << event_base_get_method(Event::event_base_global())
-                  << std::endl;
-        Event::run_forever();
+        do_read();
     }
-    else
-        std::cout << "server failed at starting on port: " << port << std::endl;
+
+    void do_write_response(response res)
+    {
+        // std::cout << "[do_write_response] ENTER \n";
+        auto self(shared_from_this());
+
+        int body_len = res.body().size();
+
+        std::string header = "HTTP/1.0 200 OK";
+        header += "\n";
+        header += "Connection: keep-alive";
+        header += "\n";
+        header += "Content-Length: ";
+        header += std::to_string(body_len);
+        header += "\r\n\r\n";
+        int out_buffer_len = 0;
+        std::copy(header.begin(), header.end(), out_buffer.begin());
+        out_buffer_len = std::distance(header.begin(), header.end());
+        std::copy(res.body().begin(), res.body().end(), out_buffer.begin() + out_buffer_len);
+        out_buffer_len += res.body().length();
+
+        boost::asio::async_write(socket_, boost::asio::buffer(out_buffer.data(), out_buffer_len),
+                                 [this, self](boost::system::error_code ec, std::size_t /*length*/) {
+                                     if (!ec)
+                                     {
+                                         do_read();
+                                     }
+                                 });
+    }
+
+private:
+    void do_read()
+    {
+        auto self(shared_from_this());
+
+        // std::cout << "[do_read] ENTER \n";
+
+        socket_.async_read_some(
+            boost::asio::buffer(&data_[0] + data_len, max_length), [this, self](boost::system::error_code ec, std::size_t length) {
+                if (!ec)
+                {
+                    self->data_len += length;
+                    size_t return_size = http_parser_execute(&(self->parser), &(self->settings), self->data_, self->data_len);
+                    if (return_size != length)
+                    {
+                        // std::cout << "[DEBUG] need to handle this case\n";
+                        std::memcpy(self->data_, self->data_ + return_size, self->data_len - return_size);
+                    }
+                    else
+                        self->data_len = 0;
+                }
+            });
+    }
+
+    void on_read(http_parser * _http_parser)
+    {
+        // std::cout << "[on_read] ENTER \n";
+        response res{ std::weak_ptr<session>(shared_from_this()), request(_http_parser) };
+        handler(std::move(res));
+    }
+
+    tcp::socket socket_;
+    int data_len;
+    char data_[max_length];
+
+    std::array<char, 1024 * 10> out_buffer;
+    http_parser parser;
+    http_parser_settings settings;
+    std::function<void(response)> handler;
+};
+
+template <class T>
+class server
+{
+public:
+    server(boost::asio::io_context & io_context, unsigned short port, std::function<void(response)> _handler) :
+        handler(_handler), acceptor_(io_context, tcp::endpoint(tcp::v4(), port))
+    {
+        do_accept();
+    }
+
+private:
+    void do_accept()
+    {
+        acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
+            if (!ec)
+            {
+                std::make_shared<T>(std::move(socket), handler)->start();
+            }
+
+            do_accept();
+        });
+    }
+
+    tcp::acceptor acceptor_;
+    std::function<void(response)> handler;
+};
+
+auto make_server(unsigned short port, std::function<void(response)> _handler)
+{
+    return server<session>{ io_context::ioc, port, _handler };
+}
+
+void start_server(unsigned short port, std::function<void(response)> _handler)
+{
+    auto server_ = make_server(port, _handler);
+    io_context::ioc.run();
 }
 
 } // namespace http
