@@ -31,23 +31,45 @@
 using boost::asio::ip::tcp;
 using json = nlohmann::ordered_json;
 
-static void http_log(log_level level, const char * format, ...)
+template <typename... Args>
+static void http_log(log_level level, Args... args)
 {
     static log_level log_level_ = LOG_TRACE;
     if (level >= log_level_)
     {
-        va_list args;
-        va_start(args, format);
-        log(format, args);
-        va_end(args);
+        log(args...);
     }
 }
 
-#define HTTP_LOG_TRACE(...) http_log(LOG_TRACE, __VA_ARGS__)
-#define HTTP_LOG_DEBUG(...) http_log(LOG_DEBUG, __VA_ARGS__)
-#define HTTP_LOG_INFO(...) http_log(LOG_INFO, __VA_ARGS__)
-#define HTTP_LOG_WARN(...) http_log(LOG_WARN, __VA_ARGS__)
-#define HTTP_LOG_ERROR(...) http_log(LOG_ERROR, __VA_ARGS__)
+template <typename... Args>
+static void HTTP_LOG_TRACE(Args... args)
+{
+    http_log(LOG_TRACE, args...);
+}
+
+template <typename... Args>
+static void HTTP_LOG_DEBUG(Args... args)
+{
+    http_log(LOG_DEBUG, args...);
+}
+
+template <typename... Args>
+static void HTTP_LOG_INFO(Args... args)
+{
+    http_log(LOG_INFO, args...);
+}
+
+template <typename... Args>
+static void HTTP_LOG_WARN(Args... args)
+{
+    http_log(LOG_WARN, args...);
+}
+
+template <typename... Args>
+static void HTTP_LOG_ERROR(Args... args)
+{
+    http_log(LOG_ERROR, args...);
+}
 
 struct logger_function_trace
 {

@@ -12,10 +12,8 @@ enum log_level
     LOG_ERROR,
 };
 
-static void log(const char * format, ...)
+template <typename... Args>
+static void log(Args... args)
 {
-    va_list args;
-    va_start(args, format);
-    printf(format, args);
-    va_end(args);
+    printf(args...);
 }
