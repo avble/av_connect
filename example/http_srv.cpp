@@ -5,6 +5,9 @@ It can be used, modified.
 
 #include "../lib/http.hpp"
 
+#include <chrono> // std::chrono::seconds
+#include <thread>
+
 using namespace std::placeholders;
 using namespace http;
 
@@ -21,11 +24,56 @@ int main(int argc, char * args[])
 
     {
         http::start_server(port, [](http::response res) {
-            // std::cout << "[DEBUG][http::start_server] is called.\n";
-            res.body() = "hello world";
-            res.send();
+            res.set_content("hello world");
+            res.end();
         });
     }
+
+    // {
+    //     static auto chunk_handler = [](http::response res) {
+    //         std::cout << "chunk_handler ENTER \n";
+
+    //         std::vector<std::string> chunk_datas = { "one\n",
+    //                                                  "twotwo\n",
+    //                                                  "threethreethree\n",
+    //                                                  "fourfourfourfour\n",
+    //                                                  "fivefivefivefivefive\n",
+    //                                                  "sixsixsixsixsixsixisxssfdfsafd\n" };
+
+    //         res.chunk_start();
+    //         for (int i = 0; i < 6; i++)
+    //         {
+    //             // std::cout << "[DEBUG] " << chunk_datas[i] << std::endl;
+    //             res.chunk_write(chunk_datas[i]);
+    //             std::this_thread::sleep_for(std::chrono::seconds(1));
+    //         }
+    //         res.chunk_end();
+    //     };
+    //     http::start_server(port, [](http::response res) {
+    //         std::cout << "res_handler ENTER \n";
+    //         std::thread{ chunk_handler, std::move(res) }.detach();
+    //         // std::cout << "[DEBUG][http::start_server] is called.\n";
+    //         // res.body() = "hello world";
+    //         // // res.send();
+    //         std::cout << "res_handler LEAVE \n";
+    //         // res.end();
+    //     });
+    // }
+
+    // {
+    //     http::route _routes;
+    //     _routes.get("/v1/completions", [](response res) {
+    //         std::cout << "/v1/completions ENTER" << std::endl;
+    //         // res.start_writing();
+    //         // res.write_data();
+    //         // res.write_data();
+    //         // res.end();
+    //         // res.end();
+    //         res.end();
+    //     });
+
+    //     http::start_server(port, _routes);
+    // }
 
     // {
     //     std::unordered_map<std::string, std::function<void(http::response)>> routes;

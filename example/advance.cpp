@@ -21,9 +21,8 @@ int main(int argc, char * args[])
 
     {
         auto http_server_ = http::make_server(port, [](http::response res) {
-            // std::cout << "[DEBUG][http::start_server] is called.\n";
-            res.body() = "hello world";
-            res.send();
+            res.set_content("hello world");
+            res.end();
         });
 
         auto ws_server = ws::make_server(port + 1, [](ws::message msg) {}, [](boost::beast::error_code ec) {});

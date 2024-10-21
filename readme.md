@@ -17,6 +17,11 @@ $ ./example/http_srv  # run server
 sudo apt install libhttp-parser-dev libboost-dev
 ```
 
+# Features
+* http/web socket server
+* support `transfer-encoding` chunk
+
+
 # http
 I have done couple of experimental results, [libevent-http_parser](https://github.com/avble/libevent-cpp-samples/tree/main/http), [libuv-http_parser](https://github.com/avble/http_parser-libuv), asio-http_parser. 
 
