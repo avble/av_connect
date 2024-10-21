@@ -13,7 +13,7 @@ enum log_level
 };
 
 template <typename... Args>
-static void log(Args... args)
+static void log(const char * format, Args... args)
 {
-    printf(args...);
+    printf(format, args...);
 }
