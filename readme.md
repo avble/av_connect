@@ -18,9 +18,10 @@ sudo apt install libhttp-parser-dev libboost-dev
 ```
 
 # http
-I have done couple of experimental results, (libevent-http_parser)[https://github.com/avble/libevent-cpp-samples/tree/main/http], (libuv-http_parser)[https://github.com/avble/http_parser-libuv], asio-http_parser. 
+I have done couple of experimental results, [libevent-http_parser](https://github.com/avble/libevent-cpp-samples/tree/main/http), [libuv-http_parser](https://github.com/avble/http_parser-libuv), asio-http_parser. 
 
-All of them are performant, and I have decided to select asio as IO event and http-parser as parsing http request. 
+All of them are performant, however I have personally decided to select asio as IO event and http-parser for a http server. 
+And its performance can achieve `220,000 request per seconds` on ubuntu-22.04/intel i5-1135G7 @ 2.40GHz
 
 ## [http server example](https://github.com/avble/av_connect/example)
 
@@ -89,7 +90,7 @@ $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
 Comparing with other http framework, which is found at [here](https://github.com/avble/av_http/example/performance)
 
 # its application
-* 
+* Real-time data processing
 * 
 
 
