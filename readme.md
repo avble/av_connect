@@ -95,7 +95,7 @@ $ ab -k -c 50 -n 100000 127.0.0.1:12345/route_01
 Comparing with other http framework, which is found at [here](https://github.com/avble/av_http/example/performance)
 
 # its application
-* Real-time data processing
+* [OpenAI API server](https://github.com/avble/av_llm) for serving LLM inference
 * 
 
 
