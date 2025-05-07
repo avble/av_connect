@@ -341,11 +341,10 @@ public:
 
     uint32_t session_id() { return base_->session_id(); }
 
-    /* chunk writing*/
     void set_content(std::string _body, std::string content_type = "text/plain")
     {
         body_                    = _body;
-        headers_["content-Type"] = content_type;
+        headers_["content-type"] = content_type;
     }
 
     void end();
@@ -658,9 +657,11 @@ public:
         std::string uri      = res.reqwest().get_uri_path();
         if (method_ == http::method::option and handle_option) // handle option
             handle_option(std::move(res));
-        if (auto handler = route_map[std::tuple<method, std::string>{ method_, uri }];
-            handler and method_ != http::method::option) // handle get, post, put, del (other than option)
+        if (auto handler = route_map[std::tuple<method, std::string>{ method_, uri }]; handler and method_ != http::method::option)
+        { // handle get, post, put, del (other than option)
+            res.set_header("Access-Control-Allow-Origin", res.reqwest().get_header("origin"));
             handler(std::move(res));
+        }
         else
             handle_not_found(std::move(res));
     }

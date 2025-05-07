@@ -294,4 +294,162 @@ void start_server(unsigned short port, std::function<void(ws::message)> message_
     io_context::ioc.run();
 }
 
+namespace client {
+
+struct message
+{
+};
+
+//------------------------------------------------------------------------------
+
+// Report a failure
+void fail(beast::error_code ec, char const * what)
+{
+    std::cerr << what << ": " << ec.message() << "\n";
+}
+
+// Sends a WebSocket message and prints the response
+class ws_client : public std::enable_shared_from_this<ws_client>
+{
+public:
+    // Resolver and socket require an io_context
+    explicit ws_client(net::io_context & ioc, std::function<void(std::string message)> _on_message) :
+        resolver_(net::make_strand(ioc)), ws_(net::make_strand(ioc))
+    {
+        on_message = _on_message;
+    }
+
+    // Start the asynchronous operation
+    void run(char const * host, char const * port, char const * text)
+    {
+        // Save these for later
+        host_ = host;
+        text_ = text;
+
+        // Look up the domain name
+        resolver_.async_resolve(host, port, beast::bind_front_handler(&ws_client::on_resolve, shared_from_this()));
+    }
+
+    void on_resolve(beast::error_code ec, tcp::resolver::results_type results)
+    {
+        if (ec)
+            return fail(ec, "resolve");
+
+        // Set the timeout for the operation
+        beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(30));
+
+        // Make the connection on the IP address we get from a lookup
+        beast::get_lowest_layer(ws_).async_connect(results, beast::bind_front_handler(&ws_client::on_connect, shared_from_this()));
+    }
+
+    void on_connect(beast::error_code ec, tcp::resolver::results_type::endpoint_type)
+    {
+        if (ec)
+            return fail(ec, "connect");
+
+        // Turn off the timeout on the tcp_stream, because
+        // the websocket stream has its own timeout system.
+        beast::get_lowest_layer(ws_).expires_never();
+
+        // Set suggested timeout settings for the websocket
+        ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+
+        // Set a decorator to change the User-Agent of the handshake
+        ws_.set_option(websocket::stream_base::decorator([](websocket::request_type & req) {
+            req.set(beast::http::field::user_agent, std::string(BOOST_BEAST_VERSION_STRING) + " websocket-client-async");
+        }));
+
+        // Perform the websocket handshake
+        ws_.async_handshake(host_, "/", beast::bind_front_handler(&ws_client::on_handshake, shared_from_this()));
+    }
+
+    void on_handshake(beast::error_code ec)
+    {
+        if (ec)
+            return fail(ec, "handshake");
+
+        // Send the message
+        // do_write("hello world");
+    }
+
+    void do_write(std::string message)
+    {
+        ws_.async_write(net::buffer(message), beast::bind_front_handler(&ws_client::on_write, shared_from_this()));
+    }
+
+    void on_write(beast::error_code ec, std::size_t bytes_transferred)
+    {
+        boost::ignore_unused(bytes_transferred);
+
+        if (ec)
+            return fail(ec, "write 01");
+
+        // Read a message into our buffer
+        do_read();
+    }
+
+    void do_read() { ws_.async_read(buffer_, beast::bind_front_handler(&ws_client::on_read, shared_from_this())); }
+
+    void on_read(beast::error_code ec, std::size_t bytes_transferred)
+    {
+        boost::ignore_unused(bytes_transferred);
+
+        if (ec)
+            return fail(ec, "read");
+
+        std::cout << beast::make_printable(buffer_.data()) << std::endl;
+
+        on_message("aaaaa");
+
+        // Close the WebSocket connection
+        // ws_.async_close(websocket::close_code::normal, beast::bind_front_handler(&ws_client::on_close, shared_from_this()));
+    }
+
+    void on_close(beast::error_code ec)
+    {
+        if (ec)
+            return fail(ec, "close");
+
+        // If we get here then the connection is closed gracefully
+
+        // The make_printable() function helps print a ConstBufferSequence
+        std::cout << beast::make_printable(buffer_.data()) << std::endl;
+    }
+
+private:
+    tcp::resolver resolver_;
+    websocket::stream<beast::tcp_stream> ws_;
+    beast::flat_buffer buffer_;
+    std::string host_;
+    std::string text_;
+    std::function<void(std::string message)> on_message;
+};
+
+// void start_ws_client(std::string _host, std::string port)
+// {
+
+//     // The io_context is required for all I/O
+//     net::io_context ioc;
+
+//     // Launch the asynchronous operation
+//     std::make_shared<ws_client>(ioc)->run(_host.c_str(), port.c_str(), "text");
+
+//     // Run the I/O service. The call will return when
+//     // the socket is closed.
+//     ioc.run();
+// }
+
+std::shared_ptr<ws_client> make_client(std::string host, std::string port, std::function<void(std::string message)> on_read_)
+{
+
+    auto ws_client_ = std::make_shared<ws_client>(io_context::ioc, on_read_);
+    ws_client_->run(host.c_str(), port.c_str(), "text");
+
+    return ws_client_;
+}
+
+} // namespace client
+
+//------------------------------------------------------------------------------
+
 } // namespace ws
