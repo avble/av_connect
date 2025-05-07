@@ -6,7 +6,7 @@ function(add_example name)
     target_link_libraries(${name} av_connect)
 endfunction()
 
-# add_example(http_srv)
+add_example(http_srv)
 add_example(ws_srv)
 # add_example(advance)
 add_example(ws_client)
