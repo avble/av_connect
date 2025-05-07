@@ -10,11 +10,14 @@ $ ./example/http_srv  # run server
 ```
 
 ## dependencies
-* http_parser
 * boost
 
-``` shell 
-sudo apt install libhttp-parser-dev libboost-dev
+``` shell UNIX
+sudo apt install libboost-dev
+```
+
+``` shell APPLE
+brew instal boost
 ```
 
 # Features
