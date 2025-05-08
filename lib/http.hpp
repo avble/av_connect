@@ -305,6 +305,7 @@ public:
     response()                              = delete;
     response & operator=(response & other)  = delete;
     response & operator=(response && other) = delete;
+    response(const response &) = delete;
 
     template <class T>
     response(std::weak_ptr<T> connect_, request && req_, boost::asio::streambuf & _out_buffer) :
@@ -344,6 +345,11 @@ public:
     void set_content(std::string _body, std::string content_type = "text/plain")
     {
         body_                    = _body;
+        headers_["content-type"] = content_type;
+    }
+
+    void set_content(const char *_body, size_t len, std::string content_type = "text/plain") {
+        body_ = std::string(_body, len);
         headers_["content-type"] = content_type;
     }
 
