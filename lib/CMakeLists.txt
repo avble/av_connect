@@ -2,7 +2,7 @@ option(AV_CONNECT_DISABLE_WS "Disable websocket" OFF)
 
 add_library(av_connect STATIC)
 
-set(av_connect_FILES io_base.cpp http.cpp http_parser.cpp)
+target_sources(av_connect PRIVATE io_base.cpp http.cpp http_parser.cpp)
 # http
 list(APPEND av_connect_FILES llhttp/api.c)
 list(APPEND av_connect_FILES llhttp/http.c)
@@ -17,6 +17,13 @@ if (EXISTS "/proc/version" AND IS_DIRECTORY "/mnt")
 	set(IS_WSL TRUE)
 endif()
 endif()
+
+if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.30")
+    if (POLICY CMP0167)
+        cmake_policy(SET CMP0167 NEW)
+    endif()
+endif()
+
 
 if (APPLE OR IS_WSL)
 	#cmake_policy(SET CMP0167 OLD)
