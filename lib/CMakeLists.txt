@@ -16,7 +16,6 @@ if (UNIX)
 if (EXISTS "/proc/version" AND IS_DIRECTORY "/mnt")
 	set(IS_WSL TRUE)
     endif()
-    endif()
 endif()
 
 if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.30")
