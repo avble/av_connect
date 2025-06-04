@@ -36,7 +36,7 @@ void response::chunk_start()
         headers_["transfer-encoding"] = "chunked";
         headers_["connection"]        = "keep-alive";
         os << make_status_line(this->result_) << "\r\n";
-        HTTP_LOG_TRACE("Header: \n");
+        HTTP_LOG_TRACE("%s", "Header: \n");
         for (const auto kv : headers_)
         {
             os << kv.first << ": " << kv.second << "\r\n";

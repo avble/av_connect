@@ -4,10 +4,12 @@
 #include "helper.hpp"
 #include "json.hpp"
 
+#include <boost/asio.hpp>
 #include <http_parser.h>
 
 #include <algorithm>
-#include <boost/asio.hpp>
+#include <any>
+#include <cinttypes>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
@@ -25,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include <inttypes.h>
 #include <sys/queue.h>
 
 using boost::asio::ip::tcp;
@@ -257,7 +258,8 @@ class response
 
         virtual void do_write(std::function<void(boost::system::error_code, std::size_t)>) = 0;
         virtual void do_write()                                                            = 0;
-        virtual uint32_t session_id()                                                      = 0;
+        virtual uint64_t session_id()                                                      = 0;
+        virtual std::any & get_data()                                                      = 0;
         virtual ~base() {}
     };
 
@@ -286,14 +288,24 @@ class response
             }
         }
 
-        uint32_t session_id()
+        uint64_t session_id()
         {
             if (auto w_p = p.lock())
             {
                 return w_p->get_session_id();
             }
 
-            return std::numeric_limits<uint32_t>::max();
+            return std::numeric_limits<uint64_t>::max();
+        }
+
+        std::any & get_data()
+        {
+            if (auto w_p = p.lock())
+            {
+                return w_p->get_data();
+            }
+
+            throw std::runtime_error("hmmm");
         }
 
         ~wrapper() {}
@@ -305,7 +317,7 @@ public:
     response()                              = delete;
     response & operator=(response & other)  = delete;
     response & operator=(response && other) = delete;
-    response(const response &) = delete;
+    response(const response &)              = delete;
 
     template <class T>
     response(std::weak_ptr<T> connect_, request && req_, boost::asio::streambuf & _out_buffer) :
@@ -340,7 +352,9 @@ public:
         headers_[header_key] = header_val;
     }
 
-    uint32_t session_id() { return base_->session_id(); }
+    uint64_t session_id() { return base_->session_id(); }
+
+    std::any & get_data() { return base_->get_data(); }
 
     void set_content(std::string _body, std::string content_type = "text/plain")
     {
@@ -348,8 +362,9 @@ public:
         headers_["content-type"] = content_type;
     }
 
-    void set_content(const char *_body, size_t len, std::string content_type = "text/plain") {
-        body_ = std::string(_body, len);
+    void set_content(const char * _body, size_t len, std::string content_type = "text/plain")
+    {
+        body_                    = std::string(_body, len);
         headers_["content-type"] = content_type;
     }
 
@@ -430,6 +445,8 @@ class session : public std::enable_shared_from_this<session>
 
         internal_wrapper(const internal_wrapper & other) { p_session = other.p_session; }
 
+        
+
         std::shared_ptr<session> p_session;
     };
 
@@ -441,6 +458,7 @@ class session : public std::enable_shared_from_this<session>
 public:
     session(tcp::socket socket, std::function<void(response)> _handler) : socket_(std::move(socket)), handler(_handler)
     {
+        HTTP_TRACE_CLS_FUNC_TRACE
         data_len          = 0;
         is_request_parsed = false;
         std::memset(&settings, 0, sizeof settings);
@@ -448,13 +466,20 @@ public:
 
     session(tcp::socket socket, std::function<void(response)> _handler, uint64_t _session_id) : session(std::move(socket), _handler)
     {
+        HTTP_TRACE_CLS_FUNC_TRACE
         session_id = _session_id;
     }
 
-    uint64_t get_session_id() { return session_id; }
+    ~session(){ HTTP_TRACE_CLS_FUNC_TRACE }
+
+    uint64_t get_session_id()
+    {
+        return session_id;
+    }
 
     void start()
     {
+        HTTP_TRACE_CLS_FUNC_TRACE
         static http_data_cb llhttp_on_uri = [](http_parser * _http_parser, const char * at, size_t length) -> int {
             internal_wrapper * wrapper_ = (internal_wrapper *) _http_parser->data;
             auto self                   = wrapper_->p_session;
@@ -515,6 +540,10 @@ public:
         do_read();
     }
 
+    /*
+    - Write and call complete function
+    - is suitable for pattern <read> --> <write chunk-1> --> <write chunk-2> --> <write chunk-3> --> <write end-chunk> --> <read>
+    */
     void do_write(std::function<void(boost::system::error_code, std::size_t)> on_write)
     {
         HTTP_TRACE_CLS_FUNC_TRACE
@@ -525,6 +554,11 @@ public:
 
         boost::asio::async_write(socket_, boost::asio::buffer(out_buffer.data(), out_buffer.size()), on_write_);
     }
+
+    /*
+    - Write and then call do read request.
+    - Is suitable for patter <read> --> <write> --> <read> --> <write> --> <read>
+    */
 
     void do_write()
     {
@@ -540,6 +574,8 @@ public:
                                  });
     }
 
+    std::any & get_data() { return data; }
+
 private:
     void do_read()
     {
@@ -548,7 +584,10 @@ private:
 
         socket_.async_read_some(
             boost::asio::buffer(&data_[0] + data_len, max_length), [this, self](boost::system::error_code ec, std::size_t length) {
-                if (!ec)
+                HTTP_LOG_TRACE("%s:  async_read_some's completion is called. with info (rc: %d)\n", __func__,
+                               static_cast<int>(ec.value()));
+
+                if (ec.value() == 0)
                 {
                     self->data_len += length;
                     is_request_parsed = false;
@@ -570,8 +609,10 @@ private:
                 }
                 else
                 {
-                    // todo: need to handle eof
-                    // std::cout << "[DEBUG] hummm " << ec.message() << std::endl;
+                    internal_wrapper * p = reinterpret_cast<internal_wrapper *>(self->parser.data);
+                    delete p;
+                    HTTP_LOG_WARN("%s:%" PRIu64 " the reading (error: %d, sefl-cnt: %d)\n", __func__, session_id,
+                                  static_cast<int>(ec.value()), self.use_count());
                 }
             });
     }
@@ -598,7 +639,10 @@ private:
     http_parser parser;
     http_parser_settings settings;
     std::function<void(response)> handler;
-    uint32_t session_id;
+    uint64_t session_id;
+
+private:
+    std::any data;
 };
 
 template <class T>
@@ -608,8 +652,10 @@ public:
     server(boost::asio::io_context & io_context, unsigned short port, std::function<void(response)> _handler) :
         handler(_handler), acceptor_(io_context, tcp::endpoint(tcp::v4(), port))
     {
-        session_cnt = 0;
-        // HTTP_LOG_INFO("session_cnt: %d \n", session_cnt);
+        session_cnt = 1;
+        // printf("")
+        HTTP_LOG_INFO("session_cnt: %" PRIu64 " \n", session_cnt);
+        // printf("session_cnt: %" PRIu64 " \n", session_cnt);
         do_accept();
     }
 
@@ -619,10 +665,10 @@ private:
         acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
             if (!ec)
             {
-                HTTP_LOG_INFO("New session is created with id: %ul\n", session_cnt);
-                std::make_shared<T>(std::move(socket), handler, session_cnt)->start();
+                HTTP_LOG_INFO("New session is created with id: %" PRIu64 "\n", session_cnt);
+                std::make_shared<T>(std::move(socket), handler, session_cnt++)->start();
             }
-            session_cnt++;
+            // session_cnt++;
             do_accept();
         });
     }
