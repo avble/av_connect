@@ -32,45 +32,14 @@
 using boost::asio::ip::tcp;
 using json = nlohmann::ordered_json;
 
-template <typename... Args>
-static void http_log(log_level level, const char * format, Args... args)
-{
-    static log_level log_level_ = LOG_TRACE;
-    if (level >= log_level_)
-    {
-        log(format, args...);
-    }
-}
+// Module-specific log macros for HTTP module
+#define HTTP_LOG_TRACE(...) log(LOG_TRACE, "HTTP", __VA_ARGS__)
+#define HTTP_LOG_DEBUG(...) log(LOG_DEBUG, "HTTP", __VA_ARGS__)
+#define HTTP_LOG_INFO(...)  log(LOG_INFO,  "HTTP", __VA_ARGS__)
+#define HTTP_LOG_WARN(...)  log(LOG_WARN,  "HTTP", __VA_ARGS__)
+#define HTTP_LOG_ERROR(...) log(LOG_ERROR, "HTTP", __VA_ARGS__)
 
-template <typename... Args>
-static void HTTP_LOG_TRACE(const char * format, Args... args)
-{
-    http_log(LOG_TRACE, format, args...);
-}
 
-template <typename... Args>
-static void HTTP_LOG_DEBUG(const char * format, Args... args)
-{
-    http_log(LOG_DEBUG, format, args...);
-}
-
-template <typename... Args>
-static void HTTP_LOG_INFO(const char * format, Args... args)
-{
-    http_log(LOG_INFO, format, args...);
-}
-
-template <typename... Args>
-static void HTTP_LOG_WARN(const char * format, Args... args)
-{
-    http_log(LOG_WARN, format, args...);
-}
-
-template <typename... Args>
-static void HTTP_LOG_ERROR(const char * format, Args... args)
-{
-    http_log(LOG_ERROR, format, args...);
-}
 
 struct logger_function_trace
 {

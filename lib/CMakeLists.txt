@@ -22,6 +22,9 @@ list(APPEND av_connect_FILES llhttp/api.c)
 list(APPEND av_connect_FILES llhttp/http.c)
 list(APPEND av_connect_FILES llhttp/llhttp.c)
 
+# utils
+# list(APPEND av_connect_FILES log.cpp)
+
 set(av_connect_include_dir ./)
 list(APPEND av_connect_include_dir ${libevent_SOURCE_DIR})
 list(APPEND av_connect_include_dir ${llhttp_SOURCE_DIR}/include)
