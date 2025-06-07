@@ -22,12 +22,17 @@
 #include <sstream>
 #include <string>
 #include <tuple>
-#include <unistd.h>
+// #include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <sys/queue.h>
+//#include <sys/queue.h>
+
+#ifdef _MSC_VER
+#include <ciso646>
+#endif
+
 
 using boost::asio::ip::tcp;
 using json = nlohmann::ordered_json;
