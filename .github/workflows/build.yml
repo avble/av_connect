@@ -1,0 +1,21 @@
+name: Build and Test
+
+on: 
+  workflow_dispatch
+
+jobs:
+  macOS-arm64:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake --preset arm64-apple-clang-release
+          cmake --build build-arm64-apple-clang-release --config Release
