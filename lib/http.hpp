@@ -44,6 +44,23 @@ using json = nlohmann::ordered_json;
 #define HTTP_LOG_WARN(...) log(LOG_WARN, "HTTP", __VA_ARGS__)
 #define HTTP_LOG_ERROR(...) log(LOG_ERROR, "HTTP", __VA_ARGS__)
 
+namespace http {
+class base_data {
+public:
+  virtual ~base_data() = default;
+  base_data() = default;
+  
+private:
+  base_data(const base_data &) = delete;
+  base_data &operator=(const base_data &) = delete;
+};
+
+struct base_data_deleter {
+  void operator()(base_data* ptr) const { delete ptr; }
+};
+
+} // namespace http
+
 struct logger_function_trace {
 public:
   logger_function_trace(std::string cls_, std::string func_)
@@ -387,7 +404,7 @@ class response {
         std::function<void(boost::system::error_code, std::size_t)>) = 0;
     virtual void do_write() = 0;
     virtual uint64_t session_id() = 0;
-    virtual std::any &get_data() = 0;
+    virtual std::unique_ptr<base_data, base_data_deleter>& get_data() = 0;
     virtual ~base() {}
   };
 
@@ -419,11 +436,10 @@ class response {
       return std::numeric_limits<uint64_t>::max();
     }
 
-    std::any &get_data() {
+    std::unique_ptr<base_data, base_data_deleter>& get_data() {
       if (auto w_p = p.lock()) {
         return w_p->get_data();
       }
-
       throw std::runtime_error("hmmm");
     }
 
@@ -473,7 +489,7 @@ public:
 
   uint64_t session_id() { return base_->session_id(); }
 
-  std::any &get_data() { return base_->get_data(); }
+  std::unique_ptr<base_data, base_data_deleter>& get_data() { return base_->get_data(); }
 
   void set_content(std::string _body, std::string content_type = "text/plain") {
     body_ = _body;
@@ -693,7 +709,7 @@ public:
         });
   }
 
-  std::any &get_data() { return data; }
+  std::unique_ptr<base_data, base_data_deleter>& get_data() { return data; }
 
 private:
   void do_read() {
@@ -760,8 +776,7 @@ private:
   uint64_t session_id;
 
 private:
-
-  std::any data;
+  std::unique_ptr<base_data, base_data_deleter> data;
 };
 
 template <class T> class server {
@@ -862,5 +877,6 @@ private:
       route_map;
   std::function<void(response)> handle_not_found;
 };
+
 
 } // namespace http

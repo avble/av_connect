@@ -28,4 +28,21 @@ int main(int argc, char *args[]) {
       res.end();
     });
   }
+
+  {
+    http::start_server(port, [](http::response res) {
+      class data : public http::base_data {
+      public:
+        data() {
+          HTTP_LOG_TRACE("data constructor");
+        }
+      };
+
+      std::unique_ptr<data, http::base_data_deleter> data_ptr(new data());
+      res.get_data() = std::move(data_ptr);
+
+      res.set_content("hello world");
+      res.end();
+    });
+  }
 }
