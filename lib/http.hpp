@@ -23,10 +23,10 @@
 #include <string>
 #include <tuple>
 // #include <unistd.h>
+#include <any>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <any>
 
 // #include <sys/queue.h>
 
@@ -49,14 +49,10 @@ class base_data {
 public:
   virtual ~base_data() = default;
   base_data() = default;
-  
+
 private:
   base_data(const base_data &) = delete;
   base_data &operator=(const base_data &) = delete;
-};
-
-struct base_data_deleter {
-  void operator()(base_data* ptr) const { delete ptr; }
 };
 
 } // namespace http
@@ -404,7 +400,7 @@ class response {
         std::function<void(boost::system::error_code, std::size_t)>) = 0;
     virtual void do_write() = 0;
     virtual uint64_t session_id() = 0;
-    virtual std::unique_ptr<base_data, base_data_deleter>& get_data() = 0;
+    virtual std::unique_ptr<base_data> &get_data() = 0;
     virtual ~base() {}
   };
 
@@ -436,7 +432,7 @@ class response {
       return std::numeric_limits<uint64_t>::max();
     }
 
-    std::unique_ptr<base_data, base_data_deleter>& get_data() {
+    std::unique_ptr<base_data> &get_data() {
       if (auto w_p = p.lock()) {
         return w_p->get_data();
       }
@@ -489,7 +485,7 @@ public:
 
   uint64_t session_id() { return base_->session_id(); }
 
-  std::unique_ptr<base_data, base_data_deleter>& get_data() { return base_->get_data(); }
+  std::unique_ptr<base_data> &get_data() { return base_->get_data(); }
 
   void set_content(std::string _body, std::string content_type = "text/plain") {
     body_ = _body;
@@ -709,7 +705,7 @@ public:
         });
   }
 
-  std::unique_ptr<base_data, base_data_deleter>& get_data() { return data; }
+  std::unique_ptr<base_data> &get_data() { return data; }
 
 private:
   void do_read() {
@@ -776,7 +772,7 @@ private:
   uint64_t session_id;
 
 private:
-  std::unique_ptr<base_data, base_data_deleter> data;
+  std::unique_ptr<base_data> data;
 };
 
 template <class T> class server {
@@ -877,6 +873,5 @@ private:
       route_map;
   std::function<void(response)> handle_not_found;
 };
-
 
 } // namespace http
