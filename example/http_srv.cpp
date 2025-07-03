@@ -39,7 +39,7 @@ int main(int argc, char *args[]) {
       };
 
       std::unique_ptr<data, http::base_data_deleter> data_ptr(new data());
-      res.get_data() = std::move(data_ptr);
+      res.get_session_data() = std::move(data_ptr);
 
       res.set_content("hello world");
       res.end();

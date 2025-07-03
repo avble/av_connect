@@ -400,7 +400,7 @@ class response {
         std::function<void(boost::system::error_code, std::size_t)>) = 0;
     virtual void do_write() = 0;
     virtual uint64_t session_id() = 0;
-    virtual std::unique_ptr<base_data> &get_data() = 0;
+    virtual std::unique_ptr<base_data> &get_session_data() = 0;
     virtual ~base() {}
   };
 
@@ -432,9 +432,9 @@ class response {
       return std::numeric_limits<uint64_t>::max();
     }
 
-    std::unique_ptr<base_data> &get_data() {
+    std::unique_ptr<base_data> &get_session_data() {
       if (auto w_p = p.lock()) {
-        return w_p->get_data();
+        return w_p->get_session_data();
       }
       throw std::runtime_error("hmmm");
     }
@@ -485,7 +485,7 @@ public:
 
   uint64_t session_id() { return base_->session_id(); }
 
-  std::unique_ptr<base_data> &get_data() { return base_->get_data(); }
+  std::unique_ptr<base_data> &get_session_data() { return base_->get_session_data(); }
 
   void set_content(std::string _body, std::string content_type = "text/plain") {
     body_ = _body;
@@ -705,7 +705,7 @@ public:
         });
   }
 
-  std::unique_ptr<base_data> &get_data() { return data; }
+  std::unique_ptr<base_data> &get_session_data() { return data; }
 
 private:
   void do_read() {
