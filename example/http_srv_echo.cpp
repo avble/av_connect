@@ -23,9 +23,9 @@ int main(int argc, char * args[])
     uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
 
     {
-        http::start_server(port, [](http::response res) {
-            res.set_content("echo");
-            res.end();
+        http::start_server(port, [](std::shared_ptr<http::response> res) {
+            res->set_content("echo");
+            res->end();
         });
     }
 }

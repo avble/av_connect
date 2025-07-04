@@ -390,26 +390,33 @@ private:
   friend class response;
 };
 
-class response {
+class response : public std::enable_shared_from_this<response> {
+  enum class response_state {
+    PENDING,   // Initial state, response not sent yet
+    STARTED,   // Headers sent (for chunked responses)
+    COMPLETED  // Response fully sent
+  };
+
   class base {
   public:
-    base() {};
+    base() = default;
     base(const base &other) = delete;
+    base& operator=(const base &other) = delete;
+    virtual ~base() = default;
 
     virtual void do_write(
         std::function<void(boost::system::error_code, std::size_t)>) = 0;
     virtual void do_write() = 0;
     virtual uint64_t session_id() = 0;
     virtual std::unique_ptr<base_data> &get_session_data() = 0;
-    virtual ~base() {}
   };
 
   template <typename T> class wrapper : public base {
   public:
     wrapper(const wrapper &other) = delete;
-
-    wrapper(wrapper &&other) { p = other.p; }
-    wrapper(std::weak_ptr<T> p_) { p = p_; }
+    wrapper& operator=(const wrapper &other) = delete;
+    wrapper(wrapper &&other) = default;
+    wrapper(std::weak_ptr<T> p_) : p(std::move(p_)) {}
 
     void do_write(
         std::function<void(boost::system::error_code, std::size_t)> on_write) {
@@ -446,32 +453,23 @@ class response {
 
 public:
   response() = delete;
-  response &operator=(response &other) = delete;
-  response &operator=(response &&other) = delete;
-  response(const response &) = delete;
+  response(const response&) = delete;
+  response& operator=(const response&) = delete;
+  response(response&&) = delete;
+  response& operator=(response&&) = delete;
 
   template <class T>
-  response(std::weak_ptr<T> connect_, request &&req_,
-           boost::asio::streambuf &_out_buffer)
-      : req(std::move(req_)), os(&_out_buffer) {
-    result_ = status_code::ok;
-    major = req_.major;
-    minor = req_.minor;
-    headers_["server"] = "av_connect";
-
-    base_ = new wrapper<T>(connect_);
-    is_owning = true;
+  static std::shared_ptr<response> create(std::weak_ptr<T> connect_, request &&req_,
+           boost::asio::streambuf &_out_buffer) {
+    return std::shared_ptr<response>(new response(connect_, std::move(req_), _out_buffer));
   }
 
-  response(response &&other)
-      : req(std::move(other.req)), base_(other.base_), os(other.os.rdbuf()) {
-    result_ = other.result_;
-    headers_ = std::move(other.headers_);
-    major = other.major;
-    minor = other.minor;
-    body_ = std::move(other.body_);
-    is_owning = other.is_owning;
-    other.is_owning = false;
+  ~response() {
+    if (state_ == response_state::PENDING) {
+      HTTP_LOG_WARN("Response was destroyed without explicitly sending a response. URI: %s. Sending default response.",
+                   req.get_uri_path().c_str());
+      send_default_response();
+    }
   }
 
   status_code &result() { return result_; }
@@ -479,13 +477,14 @@ public:
   void set_header(std::string header_key, std::string header_val) {
     std::transform(header_key.begin(), header_key.end(), header_key.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-
     headers_[header_key] = header_val;
   }
 
   uint64_t session_id() { return base_->session_id(); }
 
-  std::unique_ptr<base_data> &get_session_data() { return base_->get_session_data(); }
+  std::unique_ptr<base_data> &get_session_data() { 
+    return base_->get_session_data(); 
+  }
 
   void set_content(std::string _body, std::string content_type = "text/plain") {
     body_ = _body;
@@ -498,70 +497,127 @@ public:
     headers_["content-type"] = content_type;
   }
 
-  void end();
+  void end() {
+    if (state_ == response_state::PENDING) {
+      os << make_status_line(this->result_) << "\r\n";
+      if (req.headers_["connection"] != "")
+        headers_["connection"] = req.headers_["connection"];
 
-  /* chunk writing*/
-  void chunk_start();
+      for (const auto kv : headers_)
+        os << kv.first << ": " << kv.second << "\r\n";
 
-  void chunk_write(std::string chunk_data);
-
-  void chunk_end();
-
-  /* event source write*/
-  void event_source_start() {
-    if (is_owning) {
-      // headers_["transfer-encoding"] = "chunked";
-      headers_["content-type"] = "text/event-stream";
-      headers_["connection"] = "timeout=5, max=5";
-      chunk_start();
+      os << "content-Length: " << body_.size() << "\r\n";
+      if (body_.size() > 0) {
+        os << "\r\n";
+        os << body_;
+        base_->do_write();
+      } else {
+        os << "\r\n";
+        base_->do_write();
+      }
+      state_ = response_state::COMPLETED;
     }
   }
 
+  void chunk_start() {
+    if (state_ == response_state::PENDING) {
+      const std::lock_guard<std::mutex> lock(chunk_mutex);
+      headers_["transfer-encoding"] = "chunked";
+      headers_["connection"] = "keep-alive";
+      os << make_status_line(this->result_) << "\r\n";
+      for (const auto kv : headers_)
+        os << kv.first << ": " << kv.second << "\r\n";
+      os << "\r\n";
+      base_->do_write([](boost::system::error_code ec, std::size_t len) {});
+      state_ = response_state::STARTED;
+    }
+  }
+
+  void chunk_write(std::string chunk_data) {
+    if (state_ == response_state::STARTED) {
+      const std::lock_guard<std::mutex> lock(chunk_mutex);
+      os << std::hex << chunk_data.size() << "\r\n";
+      os << chunk_data << "\r\n";
+      base_->do_write([](boost::system::error_code ec, std::size_t len) {});
+    }
+  }
+
+  void chunk_end() {
+    if (state_ == response_state::STARTED) {
+      const std::lock_guard<std::mutex> lock(chunk_mutex);
+      os << std::hex << 0 << "\r\n";
+      os << "\r\n";
+      base_->do_write();
+      state_ = response_state::COMPLETED;
+    }
+  }
+
+  void event_source_start() {
+    headers_["content-type"] = "text/event-stream";
+    headers_["connection"] = "timeout=5, max=5";
+    chunk_start();
+  }
+
   void event_source_oai_end() {
-    auto self = std::shared_ptr<response>(new response(*this));
+    if (state_ != response_state::STARTED) return;
+    
+    auto self = shared_from_this();
     auto _do_write = [self](boost::system::error_code ec, std::size_t len) {
       self->chunk_end();
     };
 
     static const std::string oai_end_chunk = "data: [DONE]\n\n";
-    self->os << std::hex << oai_end_chunk.size() << "\r\n";
-    self->os << oai_end_chunk << "\r\n";
-    self->base_->do_write(_do_write);
+    os << std::hex << oai_end_chunk.size() << "\r\n";
+    os << oai_end_chunk << "\r\n";
+    base_->do_write(_do_write);
   }
 
   request &reqwest() { return req; }
 
-  ~response() {
-    if (is_owning) {
-      delete base_;
-    }
+  bool is_completed() const { 
+    return state_ == response_state::COMPLETED; 
+  }
+
+  void set_default_response(std::string body, status_code code = status_code::internal_server_error) {
+    default_response_body_ = std::move(body);
+    default_response_code_ = code;
   }
 
 private:
-  response(response &other)
-      : req(std::move(other.req)), base_(other.base_), os(other.os.rdbuf()) {
-
-    result_ = other.result_;
-    headers_ = std::move(other.headers_);
-    major = other.major;
-    minor = other.minor;
-    body_ = std::move(other.body_);
-    is_owning = other.is_owning;
-    other.is_owning = false;
+  template <class T>
+  response(std::weak_ptr<T> connect_, request &&req_,
+           boost::asio::streambuf &_out_buffer)
+      : req(std::move(req_)), 
+        os(&_out_buffer),
+        base_(std::make_unique<wrapper<T>>(connect_)) {
+    result_ = status_code::ok;
+    major = req_.major;
+    minor = req_.minor;
+    headers_["server"] = "av_connect";
+    state_ = response_state::PENDING;
   }
 
-  bool is_owning;
+  response_state state_ = response_state::PENDING;
   request req;
   status_code result_;
   char major;
   char minor;
   std::unordered_map<std::string, std::string> headers_;
   std::string body_;
+  std::string default_response_body_ = "No response was explicitly sent";
+  status_code default_response_code_ = status_code::internal_server_error;
 
   std::ostream os;
-  base *base_;
-
+  std::unique_ptr<base> base_;
   std::mutex chunk_mutex;
+
+  void send_default_response() {
+    if (state_ == response_state::PENDING) {
+      result_ = default_response_code_;
+      set_content(default_response_body_);
+      end();
+    }
+  }
 };
 
 class session : public std::enable_shared_from_this<session> {
@@ -578,7 +634,7 @@ class session : public std::enable_shared_from_this<session> {
   enum { max_length = 102400 };
 
 public:
-  session(tcp::socket socket, std::function<void(response)> _handler)
+  session(tcp::socket socket, std::function<void(std::shared_ptr<response>)> _handler)
       : socket_(std::move(socket)), handler(_handler) {
     HTTP_TRACE_CLS_FUNC_TRACE
     data_len = 0;
@@ -586,7 +642,7 @@ public:
     std::memset(&settings, 0, sizeof settings);
   }
 
-  session(tcp::socket socket, std::function<void(response)> _handler,
+  session(tcp::socket socket, std::function<void(std::shared_ptr<response>)> _handler,
           uint64_t _session_id)
       : session(std::move(socket), _handler) {
     HTTP_TRACE_CLS_FUNC_TRACE
@@ -749,11 +805,13 @@ private:
 
   void on_read(http_parser *_http_parser) {
     HTTP_TRACE_CLS_FUNC_TRACE
-    response res{std::weak_ptr<session>(shared_from_this()),
-                 request(_http_parser, uri, std::move(headers),
-                         {(char *)in_buffer.data().data(), in_buffer.size()}),
-                 out_buffer};
-    handler(std::move(res));
+    auto res = http::response::create(
+        std::weak_ptr<session>(shared_from_this()),
+        request(_http_parser, uri, std::move(headers),
+                {(char *)in_buffer.data().data(), in_buffer.size()}),
+        out_buffer);
+
+    handler(res);
   }
 
   tcp::socket socket_;
@@ -768,7 +826,7 @@ private:
   boost::asio::streambuf out_buffer;
   http_parser parser;
   http_parser_settings settings;
-  std::function<void(response)> handler;
+  std::function<void(std::shared_ptr<response>)> handler;
   uint64_t session_id;
 
 private:
@@ -778,13 +836,11 @@ private:
 template <class T> class server {
 public:
   server(boost::asio::io_context &io_context, unsigned short port,
-         std::function<void(response)> _handler)
+         std::function<void(std::shared_ptr<response>)> _handler)
       : handler(_handler),
         acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
     session_cnt = 1;
-    // printf("")
     HTTP_LOG_INFO("session_cnt: %" PRIu64 " \n", session_cnt);
-    // printf("session_cnt: %" PRIu64 " \n", session_cnt);
     do_accept();
   }
 
@@ -797,23 +853,22 @@ private:
                       session_cnt);
         std::make_shared<T>(std::move(socket), handler, session_cnt++)->start();
       }
-      // session_cnt++;
       do_accept();
     });
   }
 
   tcp::acceptor acceptor_;
-  std::function<void(response)> handler;
+  std::function<void(std::shared_ptr<response>)> handler;
   uint64_t session_cnt;
 };
 
 static auto make_server(unsigned short port,
-                        std::function<void(response)> _handler) {
+                        std::function<void(std::shared_ptr<response>)> _handler) {
   return server<session>{io_context::ioc, port, _handler};
 }
 
 static void start_server(unsigned short port,
-                         std::function<void(response)> _handler) {
+                         std::function<void(std::shared_ptr<response>)> _handler) {
   auto server_ = make_server(port, _handler);
   io_context::ioc.run();
 }
@@ -824,54 +879,52 @@ class route {
 
 public:
   route() {
-    handle_not_found = [](response res) {
-      res.result() = http::status_code::not_found;
-      res.end();
+    handle_not_found = [](std::shared_ptr<response> res) {
+      res->result() = http::status_code::not_found;
+      res->end();
     };
   }
 
-  void operator()(response res) {
-    http::method method_ = res.reqwest().get_method();
-    std::string uri = res.reqwest().get_uri_path();
+  void operator()(std::shared_ptr<response> res) {
+    http::method method_ = res->reqwest().get_method();
+    std::string uri = res->reqwest().get_uri_path();
     if (method_ == http::method::option and handle_option) // handle option
-      handle_option(std::move(res));
+      handle_option(res);
     if (auto handler = route_map[std::tuple<method, std::string>{method_, uri}];
         handler and
         method_ != http::method::option) { // handle get, post, put, del (other
                                            // than option)
-      res.set_header("Access-Control-Allow-Origin",
-                     res.reqwest().get_header("origin"));
-      handler(std::move(res));
+      res->set_header("Access-Control-Allow-Origin",
+                     res->reqwest().get_header("origin"));
+      handler(res);
     } else
-      handle_not_found(std::move(res));
+      handle_not_found(res);
   }
 
-  void get(std::string path, std::function<void(response)> _func) {
+  void get(std::string path, std::function<void(std::shared_ptr<response>)> _func) {
     route_map.emplace(std::tuple<method, std::string>(method::get, path),
                       _func);
   }
 
-  void post(std::string path, std::function<void(response)> _func) {
+  void post(std::string path, std::function<void(std::shared_ptr<response>)> _func) {
     route_map.emplace(std::tuple<method, std::string>(method::post, path),
                       _func);
   }
 
-  void set_option_handler(std::function<void(response)> _func) {
-    // route_map.emplace(std::tuple<method, std::string>(method::option, path),
-    // _func);
+  void set_option_handler(std::function<void(std::shared_ptr<response>)> _func) {
     handle_option = _func;
   }
 
-  void set_not_found_handler(std::function<void(response)> func_) {
+  void set_not_found_handler(std::function<void(std::shared_ptr<response>)> func_) {
     handle_not_found = func_;
   }
 
 private:
-  std::function<void(response)> handle_option;
+  std::function<void(std::shared_ptr<response>)> handle_option;
   std::unordered_map<std::tuple<method, std::string>,
-                     std::function<void(response)>>
+                     std::function<void(std::shared_ptr<response>)>>
       route_map;
-  std::function<void(response)> handle_not_found;
+  std::function<void(std::shared_ptr<response>)> handle_not_found;
 };
 
 } // namespace http

@@ -47,6 +47,19 @@ int main(int argc, char ** argv)
 }
 ```
 
+
+write chunk
+``` cpp
+int main(int argc, char ** argv)
+{
+    std::string addr = "127.0.0.1";
+    uint16_t port    = 12345;
+    http::start_server(port, [](http::response res) {
+
+    });
+}
+```
+
 # websocket echo server
 
 ``` cpp

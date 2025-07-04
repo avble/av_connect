@@ -1,35 +1,123 @@
-#include "../lib/av_http.hpp"
+/* Copyright (c) 2024-2024 Harry Le (avble.harry at gmail dot com)
+   Example of using chunked responses with both simple and advanced usage
+*/
 
-#include <fstream>
+#include "../lib/http.hpp"
+#include <chrono>
+#include <thread>
+#include <queue>
+#include <random>
 
 using namespace std::placeholders;
+using namespace http;
 
-int main(int argc, char ** argv)
-{
-    // typedef std::function<void(http::response)> route_hanhdl_func;
+// Simulates a data source that generates data at irregular intervals
+class DataGenerator {
+public:
+    DataGenerator(size_t max_size = 1024) : max_size_(max_size) {}
 
-    // evhttp * p_evhttp = evhttp_new(Event::event_base_global());
-    // std::string addr  = "127.0.0.1";
-    // uint16_t port     = 12345;
+    std::string get_data() {
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> size_dis(10, max_size_);
+        static std::uniform_int_distribution<> delay_dis(50, 200);
 
-    // std::function<void(evhttp_connection *, std::function<void(int, evhttp_request *)>, int)> on_write =
-    //     [](evhttp_connection * evcon, std::function<void(int, evhttp_request *)> on_read, int rc) {
-    //         http::read_async(evcon, on_read);
-    //     };
+        // Simulate processing delay
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_dis(gen)));
 
-    // std::function<void(int, evhttp_request *)> on_read = [&on_write, &on_read](int rc, evhttp_request * req) {
-    //     std::cout << "[DEBUG][file] ENTER" << std::endl;
-    //     std::ofstream of("./file_01");
-    //     std::vector<uint8_t> buff = http::request_get_input_buffer(req);
-    //     for (const auto & v : buff)
-    //         of << v;
+        size_t size = size_dis(gen);
+        std::string data;
+        data.reserve(size);
+        for (size_t i = 0; i < size; ++i) {
+            data += static_cast<char>('0' + (i % 10));
+        }
+        return data;
+    }
 
-    //     http::write_async_v1(req, 200, "OK", "", std::bind(on_write, req->evcon, on_read, ::_1));
-    // };
+private:
+    size_t max_size_;
+};
 
-    // auto on_accept = [&on_read](struct evhttp_connection * evcon) { http::read_async(evcon, on_read); };
+// Simple chunked response example
+void handle_simple_chunks(std::shared_ptr<response> res) {
+    res->chunk_start();
 
-    // http::start_async(p_evhttp, port, on_accept, ::_1);
+    // Send 5 chunks
+    for (int i = 0; i < 5; ++i) {
+        std::string chunk = "Chunk " + std::to_string(i) + "\n";
+        res->chunk_write(chunk);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
-    // Event::run_forever();
+    res->chunk_end();
+}
+
+// Advanced chunked response with queue management
+void handle_advanced_chunks(std::shared_ptr<response> res) {
+    // Set a small queue limit to demonstrate queue management
+    res->set_queue_limit(4096);  // 4KB queue limit
+
+    DataGenerator generator(1024);  // Generate chunks up to 1KB
+    std::queue<std::string> pending_data;
+    bool sending = true;
+
+    res->chunk_start();
+
+    // Producer thread - generates data
+    std::thread producer([&]() {
+        for (int i = 0; i < 20 && sending; ++i) {
+            auto data = generator.get_data();
+            
+            // Try to write directly
+            if (!res->try_chunk_write(data)) {
+                // Queue is full, store for later
+                pending_data.push(std::move(data));
+                HTTP_LOG_INFO("Queue full, stored chunk for later");
+            }
+        }
+        sending = false;
+    });
+
+    // Consumer thread - processes pending data when queue has space
+    std::thread consumer([&]() {
+        while (sending || !pending_data.empty()) {
+            if (!pending_data.empty() && !res->is_queue_full()) {
+                auto& data = pending_data.front();
+                if (res->try_chunk_write(data)) {
+                    pending_data.pop();
+                    HTTP_LOG_INFO("Sent pending chunk, %zu remaining", pending_data.size());
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    });
+
+    producer.join();
+    consumer.join();
+    res->chunk_end();
+}
+
+int main(int argc, char* args[]) {
+    if (argc != 3) {
+        std::cerr << "\nUsage: " << args[0] << " address port\n"
+                  << "Example: \n"
+                  << args[0] << " 0.0.0.0 12345" << std::endl;
+        return -1;
+    }
+
+    std::string addr(args[1]);
+    uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
+
+    http::route router;
+
+    // Simple chunked response example
+    router.get("/simple_chunks", handle_simple_chunks);
+
+    // Advanced chunked response example
+    router.get("/advanced_chunks", handle_advanced_chunks);
+
+    // Start server
+    http::start_server(port, std::ref(router));
+
+    return 0;
 }

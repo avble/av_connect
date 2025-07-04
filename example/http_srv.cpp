@@ -23,14 +23,14 @@ int main(int argc, char *args[]) {
   uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
 
   {
-    http::start_server(port, [](http::response res) {
-      res.set_content("hello world");
-      res.end();
+    http::start_server(port, [](std::shared_ptr<http::response> res) {
+      res->set_content("hello world");
+      res->end();
     });
   }
 
   {
-    http::start_server(port, [](http::response res) {
+    http::start_server(port, [](std::shared_ptr<http::response> res) {
       class data : public http::base_data {
       public:
         data() {
@@ -38,11 +38,11 @@ int main(int argc, char *args[]) {
         }
       };
 
-      std::unique_ptr<data, http::base_data_deleter> data_ptr(new data());
-      res.get_session_data() = std::move(data_ptr);
+      std::unique_ptr<data> data_ptr(new data());
+      res->get_session_data() = std::move(data_ptr);
 
-      res.set_content("hello world");
-      res.end();
+      res->set_content("hello world");
+      res->end();
     });
   }
 }
