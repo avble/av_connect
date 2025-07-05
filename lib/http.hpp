@@ -24,6 +24,7 @@
 #include <tuple>
 // #include <unistd.h>
 #include <any>
+#include <queue>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -43,6 +44,21 @@ using json = nlohmann::ordered_json;
 #define HTTP_LOG_INFO(...) log(LOG_INFO, "HTTP", __VA_ARGS__)
 #define HTTP_LOG_WARN(...) log(LOG_WARN, "HTTP", __VA_ARGS__)
 #define HTTP_LOG_ERROR(...) log(LOG_ERROR, "HTTP", __VA_ARGS__)
+
+#ifdef NDEBUG
+#define HTTP_ASSERT(condition, ...) ((void)0)
+#else
+#define HTTP_ASSERT(condition, ...)                                            \
+  do {                                                                         \
+    if (!(condition)) {                                                        \
+      HTTP_LOG_ERROR("Assertion failed at %s:%d", __FILE__, __LINE__);         \
+      if (sizeof(#__VA_ARGS__) > 1) {                                          \
+        HTTP_LOG_ERROR(__VA_ARGS__);                                           \
+      }                                                                        \
+      std::abort();                                                            \
+    }                                                                          \
+  } while (0)
+#endif
 
 namespace http {
 class base_data {
@@ -391,17 +407,19 @@ private:
 };
 
 class response : public std::enable_shared_from_this<response> {
+
+  // type definitions
   enum class response_state {
-    PENDING,   // Initial state, response not sent yet
-    STARTED,   // Headers sent (for chunked responses)
-    COMPLETED  // Response fully sent
+    PENDING,  // Initial state, response not sent yet
+    STARTED,  // Headers sent (for chunked responses)
+    COMPLETED // Response fully sent
   };
 
   class base {
   public:
     base() = default;
     base(const base &other) = delete;
-    base& operator=(const base &other) = delete;
+    base &operator=(const base &other) = delete;
     virtual ~base() = default;
 
     virtual void do_write(
@@ -414,7 +432,7 @@ class response : public std::enable_shared_from_this<response> {
   template <typename T> class wrapper : public base {
   public:
     wrapper(const wrapper &other) = delete;
-    wrapper& operator=(const wrapper &other) = delete;
+    wrapper &operator=(const wrapper &other) = delete;
     wrapper(wrapper &&other) = default;
     wrapper(std::weak_ptr<T> p_) : p(std::move(p_)) {}
 
@@ -451,23 +469,34 @@ class response : public std::enable_shared_from_this<response> {
     std::weak_ptr<T> p;
   };
 
+  enum class chunk_operation_type { START, WRITE, END };
+
+  struct chunk_operation {
+    chunk_operation_type type;
+    std::string data;
+    std::function<void(bool)> callback;
+  };
+
 public:
   response() = delete;
-  response(const response&) = delete;
-  response& operator=(const response&) = delete;
-  response(response&&) = delete;
-  response& operator=(response&&) = delete;
+  response(const response &) = delete;
+  response &operator=(const response &) = delete;
+  response(response &&) = delete;
+  response &operator=(response &&) = delete;
 
   template <class T>
-  static std::shared_ptr<response> create(std::weak_ptr<T> connect_, request &&req_,
-           boost::asio::streambuf &_out_buffer) {
-    return std::shared_ptr<response>(new response(connect_, std::move(req_), _out_buffer));
+  static std::shared_ptr<response> create(std::weak_ptr<T> connect_,
+                                          request &&req_,
+                                          boost::asio::streambuf &_out_buffer) {
+    return std::shared_ptr<response>(
+        new response(connect_, std::move(req_), _out_buffer));
   }
 
   ~response() {
     if (state_ == response_state::PENDING) {
-      HTTP_LOG_WARN("Response was destroyed without explicitly sending a response. URI: %s. Sending default response.",
-                   req.get_uri_path().c_str());
+      HTTP_LOG_WARN("Response was destroyed without explicitly sending a "
+                    "response. URI: %s. Sending default response.",
+                    req.get_uri_path().c_str());
       send_default_response();
     }
   }
@@ -482,15 +511,16 @@ public:
 
   uint64_t session_id() { return base_->session_id(); }
 
-  std::unique_ptr<base_data> &get_session_data() { 
-    return base_->get_session_data(); 
+  std::unique_ptr<base_data> &get_session_data() {
+    return base_->get_session_data();
   }
 
   void set_content(std::string _body, std::string content_type = "text/plain") {
-    body_ = _body;
+    body_ = std::move(_body);
     headers_["content-type"] = content_type;
   }
 
+  [[deprecated("use set_content(std::string , std::string) instead")]]
   void set_content(const char *_body, size_t len,
                    std::string content_type = "text/plain") {
     body_ = std::string(_body, len);
@@ -519,6 +549,7 @@ public:
     }
   }
 
+  [[deprecated("Use chunk_start_async() instead")]]
   void chunk_start() {
     if (state_ == response_state::PENDING) {
       const std::lock_guard<std::mutex> lock(chunk_mutex);
@@ -533,6 +564,32 @@ public:
     }
   }
 
+  // void chunk_start_async(std::function<void(boost::system::error_code)>
+  // callback = nullptr) {
+  //   if (state_ != response_state::PENDING) {
+  //     if (callback) callback(boost::system::errc::make_error_code(
+  //         boost::system::errc::operation_not_permitted));
+  //     return;
+  //   }
+
+  //   const std::lock_guard<std::mutex> lock(chunk_mutex);
+  //   headers_["transfer-encoding"] = "chunked";
+  //   headers_["connection"] = "keep-alive";
+  //   os << make_status_line(this->result_) << "\r\n";
+  //   for (const auto kv : headers_)
+  //     os << kv.first << ": " << kv.second << "\r\n";
+  //   os << "\r\n";
+
+  //   base_->do_write([this, callback](boost::system::error_code ec,
+  //   std::size_t len) {
+  //     if (!ec) {
+  //       state_ = response_state::STARTED;
+  //     }
+  //     if (callback) callback(ec);
+  //   });
+  // }
+
+  [[deprecated("Use chunk_write_async() instead")]]
   void chunk_write(std::string chunk_data) {
     if (state_ == response_state::STARTED) {
       const std::lock_guard<std::mutex> lock(chunk_mutex);
@@ -542,6 +599,13 @@ public:
     }
   }
 
+  // void chunk_write_async(std::string chunk_data,
+  //                       std::function<void(boost::system::error_code)>
+  //                       callback = nullptr) {
+  //   try_chunk_write(std::move(chunk_data), std::move(callback));
+  // }
+
+  [[deprecated("Use chunk_end_async() instead")]]
   void chunk_end() {
     if (state_ == response_state::STARTED) {
       const std::lock_guard<std::mutex> lock(chunk_mutex);
@@ -552,43 +616,103 @@ public:
     }
   }
 
+  void chunk_start_async(std::function<void(bool)> callback = nullptr) {
+    HTTP_LOG_TRACE_FUNCTION {
+      printf("[DEBUG] %s:%d \n", __func__, __LINE__);
+      std::lock_guard<std::mutex> lock(chunk_queue_mutex_);
+      chunk_queue_.push({chunk_operation_type::START, "", callback});
+    }
+    process_chunk_queue();
+    printf("[DEBUG] %s:%d \n", __func__, __LINE__);
+  }
+
+  void chunk_write_async(std::string data,
+                         std::function<void(bool)> callback = nullptr) {
+    HTTP_LOG_TRACE_FUNCTION
+
+    {
+      std::lock_guard<std::mutex> lock(chunk_queue_mutex_);
+      chunk_queue_.push(
+          {chunk_operation_type::WRITE, std::move(data), callback});
+    }
+    process_chunk_queue();
+  }
+
+  void chunk_end_async(std::function<void(bool)> callback = nullptr) {
+    HTTP_LOG_TRACE_FUNCTION {
+      std::lock_guard<std::mutex> lock(chunk_queue_mutex_);
+      chunk_queue_.push({chunk_operation_type::END, "", callback});
+    }
+    process_chunk_queue();
+  }
+
   void event_source_start() {
-    headers_["content-type"] = "text/event-stream";
-    headers_["connection"] = "timeout=5, max=5";
-    chunk_start();
+    // headers_["content-type"] = "text/event-stream";
+    // headers_["connection"] = "timeout=5, max=5";
+    // chunk_start();
+    chunk_start_async();
   }
 
   void event_source_oai_end() {
-    if (state_ != response_state::STARTED) return;
-    
-    auto self = shared_from_this();
-    auto _do_write = [self](boost::system::error_code ec, std::size_t len) {
-      self->chunk_end();
-    };
+    if (state_ != response_state::STARTED)
+      return;
 
     static const std::string oai_end_chunk = "data: [DONE]\n\n";
-    os << std::hex << oai_end_chunk.size() << "\r\n";
-    os << oai_end_chunk << "\r\n";
-    base_->do_write(_do_write);
+    chunk_write_async(oai_end_chunk, [self = shared_from_this()](bool result) {
+      if (result) {
+        self->chunk_end_async();
+      }
+    });
   }
 
   request &reqwest() { return req; }
 
-  bool is_completed() const { 
-    return state_ == response_state::COMPLETED; 
-  }
+  bool is_completed() const { return state_ == response_state::COMPLETED; }
 
-  void set_default_response(std::string body, status_code code = status_code::internal_server_error) {
+  void
+  set_default_response(std::string body,
+                       status_code code = status_code::internal_server_error) {
     default_response_body_ = std::move(body);
     default_response_code_ = code;
   }
+
+  // New chunk API
+  // void set_queue_limit(size_t limit) {
+  //   queue_size_limit_ = limit;
+  // }
+
+  // bool is_queue_full() const {
+  //   return current_queue_size_ >= queue_size_limit_;
+  // }
+
+  // bool try_chunk_write(const std::string& chunk_data,
+  //                     std::function<void(boost::system::error_code)> callback
+  //                     = nullptr) {
+  //   if (state_ != response_state::STARTED) {
+  //     if (callback) callback(boost::system::errc::make_error_code(
+  //         boost::system::errc::operation_not_permitted));
+  //     return false;
+  //   }
+
+  //   if (current_queue_size_ + chunk_data.size() > queue_size_limit_) {
+  //     return false;
+  //   }
+
+  //   const std::lock_guard<std::mutex> lock(chunk_mutex);
+  //   chunk_queue_.emplace(chunk_data, std::move(callback));
+  //   current_queue_size_ += chunk_data.size();
+
+  //   if (!is_writing_) {
+  //     process_chunk_queue();
+  //   }
+  //   return true;
+  // }
 
 private:
   template <class T>
   response(std::weak_ptr<T> connect_, request &&req_,
            boost::asio::streambuf &_out_buffer)
-      : req(std::move(req_)), 
-        os(&_out_buffer),
+      : req(std::move(req_)), os(&_out_buffer),
         base_(std::make_unique<wrapper<T>>(connect_)) {
     result_ = status_code::ok;
     major = req_.major;
@@ -597,6 +721,133 @@ private:
     state_ = response_state::PENDING;
   }
 
+  void send_default_response() noexcept {
+    if (state_ == response_state::PENDING) {
+      result_ = default_response_code_;
+      set_content(default_response_body_);
+      end();
+    }
+  }
+
+  void process_chunk_queue() {
+    // Try to acquire processing flag atomically
+    bool expected = false;
+    if (!chunk_processing_.compare_exchange_weak(expected, true)) {
+      // Another thread is already processing
+      return;
+    }
+
+    // Get next operation without holding mutex for long
+    chunk_operation op;
+    bool has_operation = false;
+    {
+      std::lock_guard<std::mutex> lock(chunk_queue_mutex_);
+      if (!chunk_queue_.empty()) {
+        op = std::move(chunk_queue_.front());
+        chunk_queue_.pop();
+        has_operation = true;
+      }
+    }
+
+    if (!has_operation) {
+      chunk_processing_ = false;
+      return;
+    }
+
+    auto self = shared_from_this();
+    auto completion_handler =
+        [self, callback = op.callback](boost::system::error_code ec,
+                                       std::size_t len) {
+          bool success = !ec;
+          if (callback)
+            callback(success);
+
+          // Release processing flag and schedule next operation
+          self->chunk_processing_ = false;
+
+          // Post continuation to event loop to avoid recursive calls
+          boost::asio::post(io_context::ioc,
+                            [self]() { self->process_chunk_queue(); });
+        };
+
+    execute_operation(op, completion_handler);
+  }
+
+  void
+  execute_operation(const chunk_operation &op,
+                    std::function<void(boost::system::error_code, std::size_t)>
+                        completion_handler) {
+    auto self = shared_from_this();
+
+    switch (op.type) {
+    case chunk_operation_type::START: {
+      if (state_ != response_state::PENDING) {
+        if (op.callback)
+          op.callback(false);
+        chunk_processing_ = false;
+        boost::asio::post(io_context::ioc,
+                          [self]() { self->process_chunk_queue(); });
+        return;
+      }
+
+      headers_["transfer-encoding"] = "chunked";
+      headers_["connection"] = "keep-alive";
+      os << make_status_line(this->result_) << "\r\n";
+      for (const auto &kv : headers_)
+        os << kv.first << ": " << kv.second << "\r\n";
+      os << "\r\n";
+
+      base_->do_write([self, completion_handler](boost::system::error_code ec,
+                                                 std::size_t len) {
+        if (!ec) {
+          self->state_ = response_state::STARTED;
+        }
+        completion_handler(ec, len);
+      });
+      break;
+    }
+
+    case chunk_operation_type::WRITE: {
+      if (state_ != response_state::STARTED) {
+        if (op.callback)
+          op.callback(false);
+        chunk_processing_ = false;
+        boost::asio::post(io_context::ioc,
+                          [self]() { self->process_chunk_queue(); });
+        return;
+      }
+
+      os << std::hex << op.data.size() << "\r\n";
+      os << op.data << "\r\n";
+      base_->do_write(completion_handler);
+      break;
+    }
+
+    case chunk_operation_type::END: {
+      if (state_ != response_state::STARTED) {
+        if (op.callback)
+          op.callback(false);
+        chunk_processing_ = false;
+        boost::asio::post(io_context::ioc,
+                          [self]() { self->process_chunk_queue(); });
+        return;
+      }
+
+      os << std::hex << 0 << "\r\n";
+      os << "\r\n";
+      base_->do_write([self, completion_handler](boost::system::error_code ec,
+                                                 std::size_t len) {
+        if (!ec) {
+          self->state_ = response_state::COMPLETED;
+        }
+        completion_handler(ec, len);
+      });
+      break;
+    }
+    }
+  }
+
+private:
   response_state state_ = response_state::PENDING;
   request req;
   status_code result_;
@@ -611,13 +862,15 @@ private:
   std::unique_ptr<base> base_;
   std::mutex chunk_mutex;
 
-  void send_default_response() {
-    if (state_ == response_state::PENDING) {
-      result_ = default_response_code_;
-      set_content(default_response_body_);
-      end();
-    }
-  }
+  // Queue management
+  // std::queue<chunk_queue_entry> chunk_queue_;
+  // size_t queue_size_limit_ = std::numeric_limits<size_t>::max();
+  // size_t current_queue_size_ = 0;
+  // bool is_writing_ = false;
+
+  std::queue<chunk_operation> chunk_queue_;
+  std::mutex chunk_queue_mutex_;
+  std::atomic<bool> chunk_processing_{false};
 };
 
 class session : public std::enable_shared_from_this<session> {
@@ -634,7 +887,8 @@ class session : public std::enable_shared_from_this<session> {
   enum { max_length = 102400 };
 
 public:
-  session(tcp::socket socket, std::function<void(std::shared_ptr<response>)> _handler)
+  session(tcp::socket socket,
+          std::function<void(std::shared_ptr<response>)> _handler)
       : socket_(std::move(socket)), handler(_handler) {
     HTTP_TRACE_CLS_FUNC_TRACE
     data_len = 0;
@@ -642,7 +896,8 @@ public:
     std::memset(&settings, 0, sizeof settings);
   }
 
-  session(tcp::socket socket, std::function<void(std::shared_ptr<response>)> _handler,
+  session(tcp::socket socket,
+          std::function<void(std::shared_ptr<response>)> _handler,
           uint64_t _session_id)
       : session(std::move(socket), _handler) {
     HTTP_TRACE_CLS_FUNC_TRACE
@@ -862,13 +1117,15 @@ private:
   uint64_t session_cnt;
 };
 
-static auto make_server(unsigned short port,
-                        std::function<void(std::shared_ptr<response>)> _handler) {
+static auto
+make_server(unsigned short port,
+            std::function<void(std::shared_ptr<response>)> _handler) {
   return server<session>{io_context::ioc, port, _handler};
 }
 
-static void start_server(unsigned short port,
-                         std::function<void(std::shared_ptr<response>)> _handler) {
+static void
+start_server(unsigned short port,
+             std::function<void(std::shared_ptr<response>)> _handler) {
   auto server_ = make_server(port, _handler);
   io_context::ioc.run();
 }
@@ -895,27 +1152,31 @@ public:
         method_ != http::method::option) { // handle get, post, put, del (other
                                            // than option)
       res->set_header("Access-Control-Allow-Origin",
-                     res->reqwest().get_header("origin"));
+                      res->reqwest().get_header("origin"));
       handler(res);
     } else
       handle_not_found(res);
   }
 
-  void get(std::string path, std::function<void(std::shared_ptr<response>)> _func) {
+  void get(std::string path,
+           std::function<void(std::shared_ptr<response>)> _func) {
     route_map.emplace(std::tuple<method, std::string>(method::get, path),
                       _func);
   }
 
-  void post(std::string path, std::function<void(std::shared_ptr<response>)> _func) {
+  void post(std::string path,
+            std::function<void(std::shared_ptr<response>)> _func) {
     route_map.emplace(std::tuple<method, std::string>(method::post, path),
                       _func);
   }
 
-  void set_option_handler(std::function<void(std::shared_ptr<response>)> _func) {
+  void
+  set_option_handler(std::function<void(std::shared_ptr<response>)> _func) {
     handle_option = _func;
   }
 
-  void set_not_found_handler(std::function<void(std::shared_ptr<response>)> func_) {
+  void
+  set_not_found_handler(std::function<void(std::shared_ptr<response>)> func_) {
     handle_not_found = func_;
   }
 

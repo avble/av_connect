@@ -6,6 +6,7 @@ endfunction()
 
 add_example(http_srv)
 add_example(http_srv_echo)
+add_example(http_srv_chunk)
 add_example(ws_srv)
 if(MSVC)
     target_compile_options(ws_srv PRIVATE /bigobj)

@@ -21,7 +21,7 @@ int main(int argc, char * args[])
 
     {
         auto http_server_ = http::make_server(port, [](std::shared_ptr<http::response> res) {
-            res->set_content("hello world");
+            res->set_content(std::string("hello world"));
             res->end();
         });
 

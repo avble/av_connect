@@ -7,6 +7,9 @@
 #include <thread>
 #include <queue>
 #include <random>
+#include <future>
+#include <atomic>
+
 
 using namespace std::placeholders;
 using namespace http;
@@ -14,110 +17,222 @@ using namespace http;
 // Simulates a data source that generates data at irregular intervals
 class DataGenerator {
 public:
-    DataGenerator(size_t max_size = 1024) : max_size_(max_size) {}
+  DataGenerator(size_t max_size = 1024) : max_size_(max_size) {}
 
-    std::string get_data() {
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> size_dis(10, max_size_);
-        static std::uniform_int_distribution<> delay_dis(50, 200);
+  std::string get_data() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> size_dis(10, max_size_);
+    static std::uniform_int_distribution<> delay_dis(50, 200);
 
-        // Simulate processing delay
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_dis(gen)));
+    // Simulate processing delay
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_dis(gen)));
 
-        size_t size = size_dis(gen);
-        std::string data;
-        data.reserve(size);
-        for (size_t i = 0; i < size; ++i) {
-            data += static_cast<char>('0' + (i % 10));
-        }
-        return data;
+    size_t size = size_dis(gen);
+    std::string data;
+    data.reserve(size);
+    for (size_t i = 0; i < size; ++i) {
+      data += static_cast<char>('0' + (i % 10));
     }
+    return data;
+  }
 
 private:
-    size_t max_size_;
+  size_t max_size_;
 };
 
+// Helper function to send chunks sequentially using callbacks
+void send_chunk_sequence(std::shared_ptr<response> res, int current_chunk, int total_chunks) {
+    if (current_chunk >= total_chunks) {
+        // All chunks sent, end the response
+        res->chunk_end_async([](bool success) {
+            if (!success) {
+                HTTP_LOG_ERROR("Failed to end chunked response");
+            }
+        });
+        return;
+    }
+
+    std::string chunk = "Chunk " + std::to_string(current_chunk) + "\n";
+    
+    res->chunk_write_async(chunk, [res, current_chunk, total_chunks](bool success) {
+        if (!success) {
+            HTTP_LOG_ERROR("Failed to write chunk %d", current_chunk);
+            return;
+        }
+
+        // Add delay and continue with next chunk
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        send_chunk_sequence(res, current_chunk + 1, total_chunks);
+    });
+}
 // Simple chunked response example
 void handle_simple_chunks(std::shared_ptr<response> res) {
-    res->chunk_start();
+    // Start chunked response
+    res->chunk_start_async([res](bool success) {
+        if (!success) {
+            HTTP_LOG_ERROR("Failed to start chunked response");
+            return;
+        }
 
-    // Send 5 chunks
-    for (int i = 0; i < 5; ++i) {
-        std::string chunk = "Chunk " + std::to_string(i) + "\n";
-        res->chunk_write(chunk);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    res->chunk_end();
+        // Chain the chunk writes using callbacks to avoid threading issues
+        send_chunk_sequence(res, 0, 5);
+    });
 }
 
-// Advanced chunked response with queue management
-void handle_advanced_chunks(std::shared_ptr<response> res) {
-    // Set a small queue limit to demonstrate queue management
-    res->set_queue_limit(4096);  // 4KB queue limit
+// Async chunk generation helper
+struct AsyncChunkState {
+    std::shared_ptr<response> res;
+    std::unique_ptr<DataGenerator> generator;
+    std::atomic<int> chunks_remaining{0};
+};
 
-    DataGenerator generator(1024);  // Generate chunks up to 1KB
-    std::queue<std::string> pending_data;
-    bool sending = true;
+void generate_next_chunk(std::shared_ptr<AsyncChunkState> state) {
+    if (state->chunks_remaining <= 0) {
+        // All chunks generated, end the response
+        state->res->chunk_end_async([](bool success) {
+            if (!success) {
+                HTTP_LOG_ERROR("Failed to end advanced chunked response");
+            }
+        });
+        return;
+    }
 
-    res->chunk_start();
+    // Generate data in a separate thread to avoid blocking
+    std::thread([state]() {
+        auto data = state->generator->get_data();
+        
+        // Write the chunk
+        state->res->chunk_write_async(data, [state](bool success) {
+            if (!success) {
+                HTTP_LOG_ERROR("Failed to write advanced chunk");
+                return;
+            }
 
-    // Producer thread - generates data
-    std::thread producer([&]() {
-        for (int i = 0; i < 20 && sending; ++i) {
-            auto data = generator.get_data();
+            state->chunks_remaining--;
             
-            // Try to write directly
-            if (!res->try_chunk_write(data)) {
-                // Queue is full, store for later
-                pending_data.push(std::move(data));
-                HTTP_LOG_INFO("Queue full, stored chunk for later");
-            }
-        }
-        sending = false;
-    });
-
-    // Consumer thread - processes pending data when queue has space
-    std::thread consumer([&]() {
-        while (sending || !pending_data.empty()) {
-            if (!pending_data.empty() && !res->is_queue_full()) {
-                auto& data = pending_data.front();
-                if (res->try_chunk_write(data)) {
-                    pending_data.pop();
-                    HTTP_LOG_INFO("Sent pending chunk, %zu remaining", pending_data.size());
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    });
-
-    producer.join();
-    consumer.join();
-    res->chunk_end();
+            // Schedule next chunk generation
+            std::thread([state]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                generate_next_chunk(state);
+            }).detach();
+        });
+    }).detach();
 }
 
-int main(int argc, char* args[]) {
-    if (argc != 3) {
-        std::cerr << "\nUsage: " << args[0] << " address port\n"
-                  << "Example: \n"
-                  << args[0] << " 0.0.0.0 12345" << std::endl;
-        return -1;
+// Fixed advanced chunked response with proper async handling
+void handle_advanced_chunks(std::shared_ptr<response> res) {
+    // Use async approach to avoid blocking the main thread
+    res->chunk_start_async([res](bool success) {
+        if (!success) {
+            HTTP_LOG_ERROR("Failed to start advanced chunked response");
+            return;
+        }
+
+        // Create a shared state to manage the async operation
+        auto state = std::make_shared<AsyncChunkState>();
+        state->res = res;
+        state->generator = std::make_unique<DataGenerator>(1024);
+        state->chunks_remaining = 20;
+        
+        // Start the async chunk generation
+        generate_next_chunk(state);
+    });
+}
+
+
+
+// Alternative simpler approach without threading
+void handle_simple_chunks_no_threading(std::shared_ptr<response> res) {
+    res->chunk_start_async([res](bool success) {
+        if (!success) {
+            return;
+        }
+
+        // Use a timer-based approach instead of sleep
+        auto timer = std::make_shared<boost::asio::steady_timer>(io_context::ioc);
+        auto chunk_count = std::make_shared<int>(0);
+        
+        // Create a shared function object to avoid self-capture issue
+        auto send_next_chunk = std::make_shared<std::function<void()>>();
+        
+        *send_next_chunk = [res, timer, chunk_count, send_next_chunk]() {
+            if (*chunk_count >= 5) {
+                res->chunk_end_async();
+                return;
+            }
+
+            std::string chunk = "Chunk " + std::to_string(*chunk_count) + "\n";
+            (*chunk_count)++;
+            
+            res->chunk_write_async(chunk, [timer, send_next_chunk](bool success) {
+                if (!success) return;
+                
+                timer->expires_after(std::chrono::milliseconds(100));
+                timer->async_wait([send_next_chunk](const boost::system::error_code& ec) {
+                    if (!ec) {
+                        (*send_next_chunk)();
+                    }
+                });
+            });
+        };
+
+        (*send_next_chunk)();
+    });
+}
+
+// Helper function for recursive chunk sending
+void send_chunk_recursive(std::shared_ptr<response> res, int current, int total) {
+    if (current >= total) {
+        res->chunk_end_async();
+        return;
     }
 
-    std::string addr(args[1]);
-    uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
+    std::string chunk = "Chunk " + std::to_string(current) + "\n";
+    res->chunk_write_async(chunk, [res, current, total](bool success) {
+        if (success) {
+            send_chunk_recursive(res, current + 1, total);
+        }
+    });
+}
 
-    http::route router;
+void handle_simple_chunks_immediate(std::shared_ptr<response> res) {
+    res->chunk_start_async([res](bool success) {
+        if (!success) {
+            return;
+        }
 
-    // Simple chunked response example
-    router.get("/simple_chunks", handle_simple_chunks);
+        // Chain chunks using recursive callback pattern
+        send_chunk_recursive(res, 0, 5);
+    });
+}
 
-    // Advanced chunked response example
-    router.get("/advanced_chunks", handle_advanced_chunks);
 
-    // Start server
-    http::start_server(port, std::ref(router));
+int main(int argc, char *args[]) {
+  if (argc != 3) {
+    std::cerr << "\nUsage: " << args[0] << " address port\n"
+              << "Example: \n"
+              << args[0] << " 0.0.0.0 12345" << std::endl;
+    return -1;
+  }
 
-    return 0;
+  std::string addr(args[1]);
+  uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
+
+  http::route router;
+
+  // Simple chunked response example
+  router.get("/simple_chunks", handle_simple_chunks);
+
+  // Advanced chunked response example
+  router.get("/advanced_chunks", handle_advanced_chunks);
+
+  router.get("/simple_chunks_safe", handle_simple_chunks_no_threading);
+    // Immediate execution without delays
+    router.get("/simple_chunks_immediate", handle_simple_chunks_immediate);
+
+  // Start server
+  http::start_server(port, std::ref(router));
+
+  return 0;
 }
