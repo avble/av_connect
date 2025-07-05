@@ -5,6 +5,7 @@ project(av_connect_prj
 
 
 option(AV_CONNECT_BUILD_EXAMPLES "Build examples" ON)
+option(AV_CONNECT_BUILD_TESTS "Build tests" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,4 +14,8 @@ add_subdirectory(lib)
 
 if (${AV_CONNECT_BUILD_EXAMPLES} STREQUAL "ON" )
     add_subdirectory(example)
+endif()
+
+if (${AV_CONNECT_BUILD_TESTS} STREQUAL "ON" )
+    add_subdirectory(test)
 endif()
