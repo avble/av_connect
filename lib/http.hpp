@@ -425,6 +425,7 @@ class response : public std::enable_shared_from_this<response> {
     virtual void do_write(
         std::function<void(boost::system::error_code, std::size_t)>) = 0;
     virtual void do_write() = 0;
+    virtual void do_read() = 0;
     virtual uint64_t session_id() = 0;
     virtual std::unique_ptr<base_data> &get_session_data() = 0;
   };
@@ -446,6 +447,12 @@ class response : public std::enable_shared_from_this<response> {
     void do_write() {
       if (auto w_p = p.lock()) {
         w_p->do_write();
+      }
+    }
+
+    void do_read() {
+      if (auto w_p = p.lock()) {
+        w_p->do_read();
       }
     }
 
@@ -841,6 +848,7 @@ private:
           self->state_ = response_state::COMPLETED;
         }
         completion_handler(ec, len);
+        self->base_->do_read();
       });
       break;
     }
@@ -1018,7 +1026,6 @@ public:
 
   std::unique_ptr<base_data> &get_session_data() { return data; }
 
-private:
   void do_read() {
     HTTP_TRACE_CLS_FUNC_TRACE
     auto self(shared_from_this());
@@ -1058,6 +1065,7 @@ private:
         });
   }
 
+private:
   void on_read(http_parser *_http_parser) {
     HTTP_TRACE_CLS_FUNC_TRACE
     auto res = http::response::create(
