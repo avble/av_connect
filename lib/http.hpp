@@ -25,6 +25,7 @@
 // #include <unistd.h>
 #include <any>
 #include <queue>
+#include <regex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -282,6 +283,7 @@ enum class method {
   post,
   put,
   option = 6,
+  patch,
 };
 
 #if 0 // plan change
@@ -359,6 +361,7 @@ public:
     method_ = other.method_;
     headers_ = std::move(other.headers_);
     body_ = std::move(other.body_);
+    params_ = std::move(other.params_);
 
     other.is_owning = false;
     is_owning = true;
@@ -391,6 +394,16 @@ public:
   }
   const std::string &body() const { return body_; }
 
+  void set_param(const std::string &key, const std::string &value) {
+    params_[key] = value;
+  }
+
+  const std::string &get_param(const std::string &key) const {
+    static const std::string empty_string;
+    auto it = params_.find(key);
+    return it != params_.end() ? it->second : empty_string;
+  }
+
   ~request() {}
 
 private:
@@ -399,6 +412,7 @@ private:
   char major;
   char minor;
   std::unordered_map<std::string, std::string> headers_;
+  std::unordered_map<std::string, std::string> params_;
   std::string body_;
 
   bool is_owning;
@@ -513,6 +527,7 @@ public:
   void set_header(std::string header_key, std::string header_val) {
     std::transform(header_key.begin(), header_key.end(), header_key.begin(),
                    [](unsigned char c) { return std::tolower(c); });
+    headers_["connection"] = req.headers_["connection"];
     headers_[header_key] = header_val;
   }
 
@@ -1141,6 +1156,157 @@ start_server(unsigned short port,
 // route
 
 class route {
+public:
+  // Structure to hold route information
+  struct route_info {
+    std::regex pattern;
+    std::vector<std::string> param_names;
+    std::function<void(std::shared_ptr<response>)> handler;
+
+    route_info(const std::string &path,
+               std::function<void(std::shared_ptr<response>)> func)
+        : handler(func) {
+      // Convert path template to regex pattern
+      std::string regex_pattern = path;
+      std::regex param_regex(R"(\{([^}]+)\})");
+      std::sregex_iterator iter(path.begin(), path.end(), param_regex);
+      std::sregex_iterator end;
+
+      // Extract parameter names and build regex
+      size_t offset = 0;
+      while (iter != end) {
+        std::smatch match = *iter;
+        param_names.push_back(match[1].str());
+
+        // Replace {param} with capture group
+        size_t pos = match.position() - offset;
+        regex_pattern.replace(pos, match.length(), "([^/]+)");
+        offset += match.length() - 7; // 7 is length of "([^/]+)"
+
+        ++iter;
+      }
+
+      // Escape other regex special characters
+      std::regex special_chars(R"([.^$*+?()[\]{}|\\])");
+      regex_pattern =
+          std::regex_replace(regex_pattern, special_chars, R"(\$&)");
+
+      // Restore our capture groups
+      std::regex restore_groups(R"(\\(\([^)]+\)\\))");
+      regex_pattern = std::regex_replace(regex_pattern, restore_groups, "$1");
+
+      pattern = std::regex("^" + regex_pattern + "$");
+    }
+  };
+
+  route() {
+    handle_not_found = [](std::shared_ptr<response> res) {
+      res->result() = http::status_code::not_found;
+      res->end();
+    };
+  }
+
+  void operator()(std::shared_ptr<response> res) {
+    http::method method_ = res->reqwest().get_method();
+    std::string uri = res->reqwest().get_uri_path();
+
+    // Handle OPTIONS method
+    if (method_ == http::method::option && handle_option) {
+      handle_option(res);
+      return;
+    }
+
+    // Skip OPTIONS for other handlers
+    if (method_ == http::method::option) {
+      handle_not_found(res);
+      return;
+    }
+
+    // Find matching route
+    if (auto routes_for_method = route_map.find(method_);
+        routes_for_method != route_map.end()) {
+      for (const auto &route_info : routes_for_method->second) {
+        std::smatch matches;
+        if (std::regex_match(uri, matches, route_info.pattern)) {
+          // Set CORS header
+          res->set_header("Access-Control-Allow-Origin",
+                          res->reqwest().get_header("origin"));
+
+          // Extract path parameters and add to request
+          for (size_t i = 0; i < route_info.param_names.size(); ++i) {
+            if (i + 1 < matches.size()) {
+              // Add parameter to request (assuming you have a method to set
+              // params)
+              res->reqwest().set_param(route_info.param_names[i],
+                                       matches[i + 1].str());
+            }
+          }
+
+          route_info.handler(res);
+          return;
+        }
+      }
+    }
+
+    // No matching route found
+    handle_not_found(res);
+  }
+
+  // HTTP method handlers
+  void get(const std::string &path,
+           std::function<void(std::shared_ptr<response>)> func) {
+    add_route(http::method::get, path, func);
+  }
+
+  void post(const std::string &path,
+            std::function<void(std::shared_ptr<response>)> func) {
+    add_route(http::method::post, path, func);
+  }
+
+  void put(const std::string &path,
+           std::function<void(std::shared_ptr<response>)> func) {
+    add_route(http::method::put, path, func);
+  }
+
+  void del(const std::string &path,
+           std::function<void(std::shared_ptr<response>)> func) {
+    add_route(http::method::del, path, func);
+  }
+
+  void patch(const std::string &path,
+             std::function<void(std::shared_ptr<response>)> func) {
+    add_route(http::method::patch, path, func);
+  }
+
+  void head(const std::string &path,
+            std::function<void(std::shared_ptr<response>)> func) {
+    add_route(http::method::head, path, func);
+  }
+
+  // Generic method for any HTTP method
+  void add_route(http::method method, const std::string &path,
+                 std::function<void(std::shared_ptr<response>)> func) {
+    route_map[method].emplace_back(path, func);
+  }
+
+  // Configuration methods
+  void set_option_handler(std::function<void(std::shared_ptr<response>)> func) {
+    handle_option = func;
+  }
+
+  void
+  set_not_found_handler(std::function<void(std::shared_ptr<response>)> func) {
+    handle_not_found = func;
+  }
+
+private:
+  std::function<void(std::shared_ptr<response>)> handle_option;
+  std::unordered_map<http::method, std::vector<route_info>> route_map;
+  std::function<void(std::shared_ptr<response>)> handle_not_found;
+};
+
+#if 0
+class route {
 
 public:
   route() {
@@ -1195,5 +1361,7 @@ private:
       route_map;
   std::function<void(std::shared_ptr<response>)> handle_not_found;
 };
+
+#endif
 
 } // namespace http
