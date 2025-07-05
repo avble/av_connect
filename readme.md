@@ -47,6 +47,78 @@ int main(int argc, char ** argv)
 }
 ```
 
+
+## Chunked Transfer Examples
+For the complete example, see [http_srv_chunk.cpp](example/http_srv_chunk.cpp).
+
+### Simple Chunked Response
+This example demonstrates sending a sequence of numbered chunks with delays:
+
+```cpp
+void handle_simple_chunks(std::shared_ptr<response> res) {
+    res->chunk_start_async([res](bool success) {
+        if (!success) {
+            return;
+        }
+
+        // Chain chunks using recursive callback pattern
+        send_chunk_recursive(res, 0, 5);
+    });
+}
+
+// Helper function for recursive chunk sending
+void send_chunk_recursive(std::shared_ptr<response> res, int current, int total) {
+    if (current >= total) {
+        res->chunk_end_async();
+        return;
+    }
+
+    std::string chunk = "Chunk " + std::to_string(current) + "\n";
+    res->chunk_write_async(chunk, [res, current, total](bool success) {
+        if (success) {
+            send_chunk_recursive(res, current + 1, total);
+        }
+    });
+}
+```
+
+### Advanced Chunked Response
+This example shows how to handle dynamic data generation with chunks:
+
+```cpp
+void handle_advanced_chunks(std::shared_ptr<response> res) {
+    res->chunk_start_async([res](bool success) {
+        if (!success) {
+            return;
+        }
+
+        auto state = std::make_shared<AsyncChunkState>();
+        state->res = res;
+        state->generator = std::make_unique<DataGenerator>(1024);
+        state->chunks_remaining = 20;
+        
+        // Start the async chunk generation
+        generate_next_chunk(state);
+    });
+}
+```
+
+To use these examples in your server:
+
+```cpp
+int main(int argc, char *args[]) {
+    http::route router;
+    
+    // Register chunk handlers
+    router.get("/simple_chunks", handle_simple_chunks);
+    router.get("/advanced_chunks", handle_advanced_chunks);
+
+    // Start server
+    http::start_server(port, std::ref(router));
+    return 0;
+}
+```
+
 # websocket echo server
 
 ``` cpp

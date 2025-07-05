@@ -20,9 +20,9 @@ int main(int argc, char * args[])
     uint16_t port = static_cast<uint16_t>(std::atoi(args[2]));
 
     {
-        auto http_server_ = http::make_server(port, [](http::response res) {
-            res.set_content("hello world");
-            res.end();
+        auto http_server_ = http::make_server(port, [](std::shared_ptr<http::response> res) {
+            res->set_content(std::string("hello world"));
+            res->end();
         });
 
         auto ws_server = ws::make_server(port + 1, [](ws::message msg) {}, [](boost::beast::error_code ec) {});
