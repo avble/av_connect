@@ -286,6 +286,19 @@ enum class method {
   patch,
 };
 
+inline std::string method_to_string(method m) {
+    switch (m) {
+        case method::del:    return "DELETE";
+        case method::get:    return "GET";
+        case method::head:   return "HEAD";
+        case method::post:   return "POST";
+        case method::put:    return "PUT";
+        case method::option: return "OPTIONS";
+        case method::patch:  return "PATCH";
+        default:            return "UNKNOWN";
+    }
+}
+
 #if 0 // plan change
 enum class method
 {
@@ -1166,8 +1179,12 @@ public:
     route_info(const std::string &path,
                std::function<void(std::shared_ptr<response>)> func)
         : handler(func) {
-      // Convert path template to regex pattern
+      // First escape all special regex characters except { and }
       std::string regex_pattern = path;
+      std::regex special_chars(R"([.^$*+?()[\]|\\])");
+      regex_pattern = std::regex_replace(regex_pattern, special_chars, R"(\$&)");
+
+      // Then replace {param} patterns with capture groups
       std::regex param_regex(R"(\{([^}]+)\})");
       std::sregex_iterator iter(path.begin(), path.end(), param_regex);
       std::sregex_iterator end;
@@ -1186,17 +1203,20 @@ public:
         ++iter;
       }
 
-      // Escape other regex special characters
-      std::regex special_chars(R"([.^$*+?()[\]{}|\\])");
-      regex_pattern =
-          std::regex_replace(regex_pattern, special_chars, R"(\$&)");
-
-      // Restore our capture groups
-      std::regex restore_groups(R"(\\(\([^)]+\)\\))");
-      regex_pattern = std::regex_replace(regex_pattern, restore_groups, "$1");
-
       pattern = std::regex("^" + regex_pattern + "$");
     }
+  };
+
+  // Structure to hold URL match results
+  struct match_result {
+    bool matched;
+    http::method method;
+    std::string original_path;
+    std::unordered_map<std::string, std::string> params;
+
+    match_result() : matched(false) {}
+    match_result(http::method m, const std::string& path) 
+        : matched(true), method(m), original_path(path) {}
   };
 
   route() {
@@ -1204,6 +1224,36 @@ public:
       res->result() = http::status_code::not_found;
       res->end();
     };
+  }
+
+  // Function to check if a URL matches any registered route
+  match_result match_url(http::method method_, const std::string& uri) const {
+    // Skip OPTIONS method
+    if (method_ == http::method::option) {
+      return match_result();
+    }
+
+    // Find matching route
+    if (auto routes_for_method = route_map.find(method_);
+        routes_for_method != route_map.end()) {
+      for (const auto &route_info : routes_for_method->second) {
+        std::smatch matches;
+        if (std::regex_match(uri, matches, route_info.pattern)) {
+          match_result result(method_, uri);
+          
+          // Extract path parameters
+          for (size_t i = 0; i < route_info.param_names.size(); ++i) {
+            if (i + 1 < matches.size()) {
+              result.params[route_info.param_names[i]] = matches[i + 1].str();
+            }
+          }
+          
+          return result;
+        }
+      }
+    }
+
+    return match_result();
   }
 
   void operator()(std::shared_ptr<response> res) {
