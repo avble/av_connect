@@ -1,0 +1,29 @@
+
+{
+	"version": 4,
+	"configurePresets": [
+		{ "name": "debug",    "hidden": true, "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+		{
+			"name":  "build",
+			"generator":   "Ninja",
+			"binaryDir":   "${sourceDir}/${presetName}",
+			"cacheVariables": {
+				"CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+				"CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/.."
+			}
+		},
+		{
+			"name":  "build-debug",
+			"generator":   "Ninja",
+			"binaryDir":   "${sourceDir}/${presetName}",
+			"inherits": ["debug"],
+			"cacheVariables": {
+				"CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+				"CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/.."
+			},
+			"environment": {
+				"AV_CONNECT_LOG_LEVEL": "TRACE"
+			}
+		}
+	]
+}

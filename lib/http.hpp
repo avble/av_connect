@@ -287,16 +287,24 @@ enum class method {
 };
 
 inline std::string method_to_string(method m) {
-    switch (m) {
-        case method::del:    return "DELETE";
-        case method::get:    return "GET";
-        case method::head:   return "HEAD";
-        case method::post:   return "POST";
-        case method::put:    return "PUT";
-        case method::option: return "OPTIONS";
-        case method::patch:  return "PATCH";
-        default:            return "UNKNOWN";
-    }
+  switch (m) {
+  case method::del:
+    return "DELETE";
+  case method::get:
+    return "GET";
+  case method::head:
+    return "HEAD";
+  case method::post:
+    return "POST";
+  case method::put:
+    return "PUT";
+  case method::option:
+    return "OPTIONS";
+  case method::patch:
+    return "PATCH";
+  default:
+    return "UNKNOWN";
+  }
 }
 
 #if 0 // plan change
@@ -1176,34 +1184,41 @@ public:
     std::vector<std::string> param_names;
     std::function<void(std::shared_ptr<response>)> handler;
 
-    route_info(const std::string &path,
-               std::function<void(std::shared_ptr<response>)> func)
+
+    route_info(const std::string &path_pattern,
+               std::function<void(std::shared_ptr<response>)> func = nullptr)
         : handler(func) {
-      // First escape all special regex characters except { and }
-      std::string regex_pattern = path;
-      std::regex special_chars(R"([.^$*+?()[\]|\\])");
-      regex_pattern = std::regex_replace(regex_pattern, special_chars, R"(\$&)");
 
-      // Then replace {param} patterns with capture groups
-      std::regex param_regex(R"(\{([^}]+)\})");
-      std::sregex_iterator iter(path.begin(), path.end(), param_regex);
+      static std::regex param_regex(R"(\{([^}]+)\})");
+      static bool silent = true;
+
+      // extract param names
+      std::sregex_iterator iter(path_pattern.begin(), path_pattern.end(), param_regex);
       std::sregex_iterator end;
-
       // Extract parameter names and build regex
-      size_t offset = 0;
       while (iter != end) {
         std::smatch match = *iter;
         param_names.push_back(match[1].str());
-
-        // Replace {param} with capture group
-        size_t pos = match.position() - offset;
-        regex_pattern.replace(pos, match.length(), "([^/]+)");
-        offset += match.length() - 7; // 7 is length of "([^/]+)"
-
         ++iter;
       }
 
-      pattern = std::regex("^" + regex_pattern + "$");
+      // replace param with capture group and construct regex pattern
+      std::string regex_pattern;
+      std::string replaced_pattern = std::regex_replace(path_pattern, param_regex, "([a-zA-Z0-9-_]+)");
+      pattern = std::regex("^" + replaced_pattern + "$");
+
+      if (!silent) {
+        // print pattern
+        
+        std::cout << "pattern: " << replaced_pattern << std::endl;
+
+        // print param_names
+        std::cout << "param_names: ";
+        for (const auto &param : param_names) {
+          std::cout << param << " ";
+        }
+        std::cout << std::endl;
+      }
     }
   };
 
@@ -1215,7 +1230,7 @@ public:
     std::unordered_map<std::string, std::string> params;
 
     match_result() : matched(false) {}
-    match_result(http::method m, const std::string& path) 
+    match_result(http::method m, const std::string &path)
         : matched(true), method(m), original_path(path) {}
   };
 
@@ -1227,7 +1242,7 @@ public:
   }
 
   // Function to check if a URL matches any registered route
-  match_result match_url(http::method method_, const std::string& uri) const {
+  match_result match_url(http::method method_, const std::string &uri) const {
     // Skip OPTIONS method
     if (method_ == http::method::option) {
       return match_result();
@@ -1240,14 +1255,14 @@ public:
         std::smatch matches;
         if (std::regex_match(uri, matches, route_info.pattern)) {
           match_result result(method_, uri);
-          
+
           // Extract path parameters
           for (size_t i = 0; i < route_info.param_names.size(); ++i) {
             if (i + 1 < matches.size()) {
               result.params[route_info.param_names[i]] = matches[i + 1].str();
             }
           }
-          
+
           return result;
         }
       }
