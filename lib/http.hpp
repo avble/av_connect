@@ -384,26 +384,29 @@ public:
     body_ = std::move(other.body_);
     params_ = std::move(other.params_);
 
-    other.is_owning = false;
-    is_owning = true;
+    // other.is_owning = false;
+    // is_owning = true;
   }
 
-  template <class T> request(T parser) {
-    major = http_parser_get_major(parser);
-    minor = http_parser_get_minor(parser);
-    method_ = http_parser_get_method(parser);
-  }
+  // template <class T> request(T parser) {
+  //   major = http_parser_get_major(parser);
+  //   minor = http_parser_get_minor(parser);
+  //   method_ = http_parser_get_method(parser);
+  // }
 
-  template <class T>
-  request(T parser, std::string _uri_path) : request(parser) {
-    uri_path = _uri_path;
-  }
+  // template <class T>
+  // request(T parser, std::string _uri_path) : request(parser) {
+  //   uri_path = _uri_path;
+  // }
 
   template <class T>
   request(T parser, std::string _uri_path,
           std::unordered_map<std::string, std::string> &&_header,
-          std::string _body)
-      : request(parser, _uri_path) {
+          std::string _body) {
+    major = http_parser_get_major(parser);
+    minor = http_parser_get_minor(parser);
+    method_ = http_parser_get_method(parser);
+    uri_path = _uri_path;
     headers_ = std::move(_header);
     body_ = _body;
   }
@@ -436,7 +439,7 @@ private:
   std::unordered_map<std::string, std::string> params_;
   std::string body_;
 
-  bool is_owning;
+  // bool is_owning;
 
   friend class response;
 };
