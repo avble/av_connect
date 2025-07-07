@@ -461,7 +461,7 @@ class response : public std::enable_shared_from_this<response> {
         std::function<void(boost::system::error_code, std::size_t)>) = 0;
     virtual void do_write() = 0;
     virtual void do_read() = 0;
-    virtual uint64_t session_id() = 0;
+    virtual uint64_t session_id() const = 0;
     virtual std::unique_ptr<base_data> &get_session_data() = 0;
   };
 
@@ -491,15 +491,15 @@ class response : public std::enable_shared_from_this<response> {
       }
     }
 
-    uint64_t session_id() {
+    uint64_t session_id() const override {
       if (auto w_p = p.lock()) {
-        return w_p->get_session_id();
+        return w_p->session_id();
       }
 
       return std::numeric_limits<uint64_t>::max();
     }
 
-    std::unique_ptr<base_data> &get_session_data() {
+    std::unique_ptr<base_data> &get_session_data() override {
       if (auto w_p = p.lock()) {
         return w_p->get_session_data();
       }
@@ -552,7 +552,7 @@ public:
     headers_[header_key] = header_val;
   }
 
-  uint64_t session_id() { return base_->session_id(); }
+  uint64_t session_id() const { return base_->session_id(); }
 
   std::unique_ptr<base_data> &get_session_data() {
     return base_->get_session_data();
@@ -660,13 +660,13 @@ public:
   }
 
   void chunk_start_async(std::function<void(bool)> callback = nullptr) {
-    HTTP_LOG_TRACE_FUNCTION {
-      printf("[DEBUG] %s:%d \n", __func__, __LINE__);
+    HTTP_LOG_TRACE_FUNCTION 
+    
+    {
       std::lock_guard<std::mutex> lock(chunk_queue_mutex_);
       chunk_queue_.push({chunk_operation_type::START, "", callback});
     }
     process_chunk_queue();
-    printf("[DEBUG] %s:%d \n", __func__, __LINE__);
   }
 
   void chunk_write_async(std::string data,
@@ -945,13 +945,13 @@ public:
           uint64_t _session_id)
       : session(std::move(socket), _handler) {
     HTTP_TRACE_CLS_FUNC_TRACE
-    session_id = _session_id;
+    session_id_ = _session_id;
   }
 
   ~session(){HTTP_TRACE_CLS_FUNC_TRACE}
 
-  uint64_t get_session_id() {
-    return session_id;
+  uint64_t session_id() {
+    return session_id_;
   }
 
   void start() {
@@ -1095,7 +1095,7 @@ public:
             delete p;
             HTTP_LOG_WARN("%s:%" PRIu64
                           " the reading (error: %d, sefl-cnt: %d)\n",
-                          __func__, session_id, static_cast<int>(ec.value()),
+                          __func__, session_id_, static_cast<int>(ec.value()),
                           self.use_count());
           }
         });
@@ -1126,7 +1126,7 @@ private:
   http_parser parser;
   http_parser_settings settings;
   std::function<void(std::shared_ptr<response>)> handler;
-  uint64_t session_id;
+  uint64_t session_id_;
 
 private:
   std::unique_ptr<base_data> data;
@@ -1307,9 +1307,11 @@ public:
             }
           }
           // Add ANSI color codes: red for method, green for URI
-          HTTP_LOG_INFO("Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m\n", 
-                       http::method_to_string(method_).c_str(),
-                       uri.c_str());
+          // add session id
+          HTTP_LOG_INFO("[%05d] Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m\n", 
+                      res->session_id(),
+                      http::method_to_string(method_).c_str(),
+                      uri.c_str());
 
           route_info.handler(res);
           return;
