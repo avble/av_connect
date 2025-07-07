@@ -1306,8 +1306,8 @@ public:
                                        matches[i + 1].str());
             }
           }
-
-          HTTP_LOG_INFO("Method: %s, URI: %s\n", 
+          // Add ANSI color codes: red for method, green for URI
+          HTTP_LOG_INFO("Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m\n", 
                        http::method_to_string(method_).c_str(),
                        uri.c_str());
 
