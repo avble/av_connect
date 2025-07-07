@@ -1307,6 +1307,11 @@ public:
             }
           }
 
+          HTTP_LOG_INFO("Method: %s, URI: %s", 
+                       http::method_to_string(method_).c_str(),
+                       uri.c_str());
+          HTTP_LOG_DEBUG("Route matched: %s", route_info.pattern.str().c_str());
+
           route_info.handler(res);
           return;
         }
