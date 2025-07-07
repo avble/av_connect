@@ -383,32 +383,20 @@ public:
     headers_ = std::move(other.headers_);
     body_ = std::move(other.body_);
     params_ = std::move(other.params_);
-
-    // other.is_owning = false;
-    // is_owning = true;
+    request_counter_ = other.request_counter_;
   }
-
-  // template <class T> request(T parser) {
-  //   major = http_parser_get_major(parser);
-  //   minor = http_parser_get_minor(parser);
-  //   method_ = http_parser_get_method(parser);
-  // }
-
-  // template <class T>
-  // request(T parser, std::string _uri_path) : request(parser) {
-  //   uri_path = _uri_path;
-  // }
 
   template <class T>
   request(T parser, std::string _uri_path,
           std::unordered_map<std::string, std::string> &&_header,
-          std::string _body) {
+          std::string _body, uint64_t request_counter) {
     major = http_parser_get_major(parser);
     minor = http_parser_get_minor(parser);
     method_ = http_parser_get_method(parser);
     uri_path = _uri_path;
     headers_ = std::move(_header);
     body_ = _body;
+    request_counter_ = request_counter;
   }
 
   const std::string &get_uri_path() { return uri_path; }
@@ -417,6 +405,7 @@ public:
     return headers_[header_key];
   }
   const std::string &body() const { return body_; }
+  uint64_t request_counter() const { return request_counter_; }
 
   void set_param(const std::string &key, const std::string &value) {
     params_[key] = value;
@@ -438,8 +427,7 @@ private:
   std::unordered_map<std::string, std::string> headers_;
   std::unordered_map<std::string, std::string> params_;
   std::string body_;
-
-  // bool is_owning;
+  uint64_t request_counter_;
 
   friend class response;
 };
@@ -940,6 +928,7 @@ public:
     HTTP_TRACE_CLS_FUNC_TRACE
     data_len = 0;
     is_request_parsed = false;
+    request_counter_ = 1;
     std::memset(&settings, 0, sizeof settings);
   }
 
@@ -955,6 +944,10 @@ public:
 
   uint64_t session_id() {
     return session_id_;
+  }
+
+  uint64_t request_counter() const {
+    return request_counter_;
   }
 
   void start() {
@@ -1110,9 +1103,11 @@ private:
     auto res = http::response::create(
         std::weak_ptr<session>(shared_from_this()),
         request(_http_parser, uri, std::move(headers),
-                {(char *)in_buffer.data().data(), in_buffer.size()}),
+                {(char *)in_buffer.data().data(), in_buffer.size()},
+                request_counter_),
         out_buffer);
 
+    request_counter_++;
     handler(res);
   }
 
@@ -1123,6 +1118,7 @@ private:
   std::string uri;
   std::string header_field;
   std::unordered_map<std::string, std::string> headers;
+  uint64_t request_counter_;
 
   boost::asio::streambuf in_buffer;
   boost::asio::streambuf out_buffer;
