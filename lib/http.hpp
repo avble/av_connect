@@ -383,20 +383,20 @@ public:
     headers_ = std::move(other.headers_);
     body_ = std::move(other.body_);
     params_ = std::move(other.params_);
-    request_counter_ = other.request_counter_;
+    request_id_ = other.request_id_;
   }
 
   template <class T>
   request(T parser, std::string _uri_path,
           std::unordered_map<std::string, std::string> &&_header,
-          std::string _body, uint64_t request_counter) {
+          std::string _body, uint64_t _req_id) {
     major = http_parser_get_major(parser);
     minor = http_parser_get_minor(parser);
     method_ = http_parser_get_method(parser);
     uri_path = _uri_path;
     headers_ = std::move(_header);
     body_ = _body;
-    request_counter_ = request_counter;
+    request_id_ = _req_id;
   }
 
   const std::string &get_uri_path() { return uri_path; }
@@ -405,7 +405,7 @@ public:
     return headers_[header_key];
   }
   const std::string &body() const { return body_; }
-  uint64_t request_counter() const { return request_counter_; }
+  uint64_t request_id() const { return request_id_; }
 
   void set_param(const std::string &key, const std::string &value) {
     params_[key] = value;
@@ -427,7 +427,7 @@ private:
   std::unordered_map<std::string, std::string> headers_;
   std::unordered_map<std::string, std::string> params_;
   std::string body_;
-  uint64_t request_counter_;
+  uint64_t request_id_;
 
   friend class response;
 };
