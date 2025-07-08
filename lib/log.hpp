@@ -72,7 +72,7 @@ template <typename... Args>
 static void log(log_level level, const char *module, const char *format,
                 Args... args) {
   if (level >= current_log_level) {
-    printf("%s[%s] ", get_level_prefix(level), module);
+    printf("%-7s[%-6s] ", get_level_prefix(level), module);
     printf(format, args...);
   }
 }
