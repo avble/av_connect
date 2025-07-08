@@ -651,8 +651,8 @@ public:
   }
 
   void chunk_start_async(std::function<void(bool)> callback = nullptr) {
-    HTTP_LOG_TRACE_FUNCTION 
-    
+    HTTP_LOG_TRACE_FUNCTION
+
     {
       std::lock_guard<std::mutex> lock(chunk_queue_mutex_);
       chunk_queue_.push({chunk_operation_type::START, "", callback});
@@ -946,9 +946,7 @@ public:
     return session_id_;
   }
 
-  uint64_t request_counter() const {
-    return request_counter_;
-  }
+  uint64_t request_counter() const { return request_counter_; }
 
   void start() {
     HTTP_TRACE_CLS_FUNC_TRACE
@@ -1138,7 +1136,6 @@ public:
       : handler(_handler),
         acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
     session_cnt = 1;
-    HTTP_LOG_INFO("session_cnt: %" PRIu64 " \n", session_cnt);
     do_accept();
   }
 
@@ -1183,7 +1180,6 @@ public:
     std::vector<std::string> param_names;
     std::function<void(std::shared_ptr<response>)> handler;
 
-
     route_info(const std::string &path_pattern,
                std::function<void(std::shared_ptr<response>)> func = nullptr)
         : handler(func) {
@@ -1192,7 +1188,8 @@ public:
       static bool silent = true;
 
       // extract param names
-      std::sregex_iterator iter(path_pattern.begin(), path_pattern.end(), param_regex);
+      std::sregex_iterator iter(path_pattern.begin(), path_pattern.end(),
+                                param_regex);
       std::sregex_iterator end;
       // Extract parameter names and build regex
       while (iter != end) {
@@ -1203,12 +1200,13 @@ public:
 
       // replace param with capture group and construct regex pattern
       std::string regex_pattern;
-      std::string replaced_pattern = std::regex_replace(path_pattern, param_regex, "([a-zA-Z0-9-_]+)");
+      std::string replaced_pattern =
+          std::regex_replace(path_pattern, param_regex, "([a-zA-Z0-9-_]+)");
       pattern = std::regex("^" + replaced_pattern + "$");
 
       if (!silent) {
         // print pattern
-        
+
         std::cout << "pattern: " << replaced_pattern << std::endl;
 
         // print param_names
@@ -1307,10 +1305,10 @@ public:
           }
           // Add ANSI color codes: red for method, green for URI
           // add session id
-          HTTP_LOG_INFO("[%05d] Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m\n", 
-                      res->session_id(),
-                      http::method_to_string(method_).c_str(),
-                      uri.c_str());
+          HTTP_LOG_INFO(
+              "[%05d] Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m\n",
+              res->session_id(), http::method_to_string(method_).c_str(),
+              uri.c_str());
 
           route_info.handler(res);
           return;
