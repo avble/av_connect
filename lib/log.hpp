@@ -1,5 +1,5 @@
-#ifndef __LOG_H__
-#define __LOG_H__
+#ifndef __AV_CONNECT_LOG_H__
+#define __AV_CONNECT_LOG_H__
 
 #include <cstdarg>
 #include <cstdlib>

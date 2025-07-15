@@ -1087,10 +1087,10 @@ public:
             internal_wrapper *p =
                 reinterpret_cast<internal_wrapper *>(self->parser.data);
             delete p;
-            HTTP_LOG_WARN("%s:%" PRIu64
-                          " the reading (error: %d, sefl-cnt: %d)\n",
-                          __func__, session_id_, static_cast<int>(ec.value()),
-                          self.use_count());
+            HTTP_LOG_DEBUG("%s:%" PRIu64
+                           " the reading (error: %d, sefl-cnt: %d)\n",
+                           __func__, session_id_, static_cast<int>(ec.value()),
+                           self.use_count());
           }
         });
   }
