@@ -20,3 +20,4 @@ if(MSVC)
     target_compile_options(ws_client PRIVATE /bigobj)
 endif()
 
+add_example(client)
