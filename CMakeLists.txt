@@ -19,3 +19,5 @@ endif()
 if (${AV_CONNECT_BUILD_TESTS} STREQUAL "ON" )
     add_subdirectory(test)
 endif()
+
+add_example(client)

@@ -680,23 +680,16 @@ public:
     process_chunk_queue();
   }
 
-  void event_source_start() {
-    // headers_["content-type"] = "text/event-stream";
-    // headers_["connection"] = "timeout=5, max=5";
-    // chunk_start();
-    chunk_start_async();
-  }
+  // oai event source methods
+  void event_source_start() { chunk_start_async(); }
 
   void event_source_oai_end() {
     if (state_ != response_state::STARTED)
       return;
 
     static const std::string oai_end_chunk = "data: [DONE]\n\n";
-    chunk_write_async(oai_end_chunk, [self = shared_from_this()](bool result) {
-      if (result) {
-        self->chunk_end_async();
-      }
-    });
+    chunk_write_async(oai_end_chunk);
+    chunk_end_async();
   }
 
   request &reqwest() { return req; }
@@ -709,38 +702,6 @@ public:
     default_response_body_ = std::move(body);
     default_response_code_ = code;
   }
-
-  // New chunk API
-  // void set_queue_limit(size_t limit) {
-  //   queue_size_limit_ = limit;
-  // }
-
-  // bool is_queue_full() const {
-  //   return current_queue_size_ >= queue_size_limit_;
-  // }
-
-  // bool try_chunk_write(const std::string& chunk_data,
-  //                     std::function<void(boost::system::error_code)> callback
-  //                     = nullptr) {
-  //   if (state_ != response_state::STARTED) {
-  //     if (callback) callback(boost::system::errc::make_error_code(
-  //         boost::system::errc::operation_not_permitted));
-  //     return false;
-  //   }
-
-  //   if (current_queue_size_ + chunk_data.size() > queue_size_limit_) {
-  //     return false;
-  //   }
-
-  //   const std::lock_guard<std::mutex> lock(chunk_mutex);
-  //   chunk_queue_.emplace(chunk_data, std::move(callback));
-  //   current_queue_size_ += chunk_data.size();
-
-  //   if (!is_writing_) {
-  //     process_chunk_queue();
-  //   }
-  //   return true;
-  // }
 
 private:
   template <class T>
@@ -824,8 +785,11 @@ private:
         return;
       }
 
+      headers_ = {};
+
       headers_["transfer-encoding"] = "chunked";
       headers_["connection"] = "keep-alive";
+      headers_["content-type"] = "text/event-stream";
       os << make_status_line(this->result_) << "\r\n";
       for (const auto &kv : headers_)
         os << kv.first << ": " << kv.second << "\r\n";
@@ -850,7 +814,6 @@ private:
                           [self]() { self->process_chunk_queue(); });
         return;
       }
-
       os << std::hex << op.data.size() << "\r\n";
       os << op.data << "\r\n";
       base_->do_write(completion_handler);
@@ -897,12 +860,6 @@ private:
   std::unique_ptr<base> base_;
   std::mutex chunk_mutex;
 
-  // Queue management
-  // std::queue<chunk_queue_entry> chunk_queue_;
-  // size_t queue_size_limit_ = std::numeric_limits<size_t>::max();
-  // size_t current_queue_size_ = 0;
-  // bool is_writing_ = false;
-
   std::queue<chunk_operation> chunk_queue_;
   std::mutex chunk_queue_mutex_;
   std::atomic<bool> chunk_processing_{false};
@@ -929,6 +886,7 @@ public:
     data_len = 0;
     is_request_parsed = false;
     request_counter_ = 1;
+    state = state_none;
     std::memset(&settings, 0, sizeof settings);
   }
 
@@ -1025,10 +983,25 @@ public:
   void do_write(
       std::function<void(boost::system::error_code, std::size_t)> on_write) {
     HTTP_TRACE_CLS_FUNC_TRACE
-    auto on_write_ = [self(shared_from_this()), on_write](
+
+    if (state_is_writing())
+      return;
+
+    if (sate_is_waiting_for_close())
+      return;
+
+    enter_writing_state();
+
+    auto on_write_ = [this, self(shared_from_this()), on_write](
                          boost::system::error_code ec, std::size_t size) {
-      self->out_buffer.consume(self->out_buffer.size());
-      on_write(ec, size);
+      leave_writing_state();
+      if (!ec) {
+        self->out_buffer.consume(self->out_buffer.size());
+        on_write(ec, size);
+      } else {
+        enter_waiting_for_close_state();        
+        handle_error();
+      }
     };
 
     boost::asio::async_write(
@@ -1039,17 +1012,31 @@ public:
   /*
   - Write and then call do read request.
   - Is suitable for patter <read> --> <write> --> <read> --> <write> --> <read>
+  -> <write>
   */
 
   void do_write() {
     HTTP_TRACE_CLS_FUNC_TRACE
+
+    if (state_is_writing())
+      return;
+
+    if (sate_is_waiting_for_close())
+      return;
+
+    enter_writing_state();
+
     auto self(shared_from_this());
     boost::asio::async_write(
         socket_, boost::asio::buffer(out_buffer.data(), out_buffer.size()),
-        [self](boost::system::error_code ec, std::size_t /*length*/) {
+        [this, self](boost::system::error_code ec, std::size_t /*length*/) {
+          leave_writing_state();
           if (!ec) {
             self->out_buffer.consume(self->out_buffer.size());
             self->do_read();
+          } else {
+            enter_waiting_for_close_state();
+            handle_error();
           }
         });
   }
@@ -1058,14 +1045,24 @@ public:
 
   void do_read() {
     HTTP_TRACE_CLS_FUNC_TRACE
-    auto self(shared_from_this());
 
+    if (state_is_reading())
+      return;
+
+    if (sate_is_waiting_for_close())
+      return;
+
+    enter_reading_state();
+
+    auto self(shared_from_this());
     socket_.async_read_some(
         boost::asio::buffer(&data_[0] + data_len, max_length),
         [this, self](boost::system::error_code ec, std::size_t length) {
           HTTP_LOG_TRACE("%s:  async_read_some's completion is called. with "
                          "info (rc: %d)\n",
                          __func__, static_cast<int>(ec.value()));
+
+          leave_reading_state();
 
           if (ec.value() == 0) {
             self->data_len += length;
@@ -1084,6 +1081,8 @@ public:
               self->data_len = 0;
             }
           } else {
+            enter_waiting_for_close_state();
+
             internal_wrapper *p =
                 reinterpret_cast<internal_wrapper *>(self->parser.data);
             delete p;
@@ -1091,6 +1090,7 @@ public:
                            " the reading (error: %d, sefl-cnt: %d)\n",
                            __func__, session_id_, static_cast<int>(ec.value()),
                            self.use_count());
+            handle_error();
           }
         });
   }
@@ -1109,6 +1109,24 @@ private:
     handler(res);
   }
 
+void handle_error() { HTTP_TRACE_CLS_FUNC_TRACE }
+
+  bool state_is_reading() { return state & state_reading; }
+
+  bool state_is_writing() { return state & state_writing; }
+
+  bool sate_is_waiting_for_close() { return state & state_waiting_close; }
+
+  void enter_reading_state() { state |= state_reading; }
+
+  void leave_reading_state() { state &= ~state_reading; }
+
+  void enter_writing_state() { state |= state_writing; }
+
+  void leave_writing_state() { state &= ~state_writing; }
+
+  void enter_waiting_for_close_state() { state |= state_waiting_close; }
+
   tcp::socket socket_;
   int data_len;
   char data_[max_length];
@@ -1126,6 +1144,12 @@ private:
   uint64_t session_id_;
 
 private:
+  int state;
+  const int state_none = 0;
+  const int state_reading = 1;
+  const int state_writing = 2;
+  const int state_waiting_close = 4;
+
   std::unique_ptr<base_data> data;
 };
 
@@ -1233,6 +1257,14 @@ public:
 
   route() {
     handle_not_found = [](std::shared_ptr<response> res) {
+      // log include session, req
+
+      HTTP_LOG_WARN("[%05d] Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m "
+                    "Not found\n",
+                    res->session_id(),
+                    http::method_to_string(res->reqwest().get_method()).c_str(),
+                    res->reqwest().get_uri_path().c_str());
+
       res->result() = http::status_code::not_found;
       res->end();
     };
@@ -1309,6 +1341,10 @@ public:
               "[%05d] Method: \033[31m%s\033[0m, URI: \033[32m%s\033[0m\n",
               res->session_id(), http::method_to_string(method_).c_str(),
               uri.c_str());
+
+          // print log body
+          HTTP_LOG_INFO("[%05d] Body: \n%s\n", res->session_id(),
+                        res->reqwest().body().c_str());
 
           route_info.handler(res);
           return;
