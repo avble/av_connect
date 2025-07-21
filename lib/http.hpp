@@ -453,6 +453,7 @@ class response : public std::enable_shared_from_this<response> {
     virtual void do_write() = 0;
     virtual void do_read() = 0;
     virtual uint64_t session_id() const = 0;
+    virtual const base_data *get_session_data() const = 0;
     virtual std::unique_ptr<base_data> &get_session_data() = 0;
   };
 
@@ -488,6 +489,14 @@ class response : public std::enable_shared_from_this<response> {
       }
 
       return std::numeric_limits<uint64_t>::max();
+    }
+
+    const base_data *get_session_data() const override {
+      if (auto w_p = p.lock()) {
+        const T *t_ptr = w_p.get();
+        return t_ptr->get_session_data();
+      }
+      throw std::runtime_error("hmmm");
     }
 
     std::unique_ptr<base_data> &get_session_data() override {
@@ -545,7 +554,14 @@ public:
 
   uint64_t session_id() const { return base_->session_id(); }
 
-  std::unique_ptr<base_data> &get_session_data() {
+  /*
+const base_data *session_data() const {
+const base *base_ptr_ = base_.get();
+return base_ptr_->get_session_data();
+}
+  */
+
+  std::unique_ptr<base_data> &session_data() {
     return base_->get_session_data();
   }
 
@@ -580,6 +596,9 @@ public:
         base_->do_write();
       }
       state_ = response_state::COMPLETED;
+    } else {
+      HTTP_LOG_WARN("Response already sent or in progress. URI: %s",
+                    req.get_uri_path().c_str());
     }
   }
 
@@ -999,7 +1018,7 @@ public:
         self->out_buffer.consume(self->out_buffer.size());
         on_write(ec, size);
       } else {
-        enter_waiting_for_close_state();        
+        enter_waiting_for_close_state();
         handle_error();
       }
     };
@@ -1041,6 +1060,7 @@ public:
         });
   }
 
+  const base_data *get_session_data() const { return data.get(); }
   std::unique_ptr<base_data> &get_session_data() { return data; }
 
   void do_read() {
@@ -1109,7 +1129,7 @@ private:
     handler(res);
   }
 
-void handle_error() { HTTP_TRACE_CLS_FUNC_TRACE }
+  void handle_error() { HTTP_TRACE_CLS_FUNC_TRACE }
 
   bool state_is_reading() { return state & state_reading; }
 
@@ -1343,8 +1363,8 @@ public:
               uri.c_str());
 
           // print log body
-          HTTP_LOG_INFO("[%05d] Body: \n%s\n", res->session_id(),
-                        res->reqwest().body().c_str());
+          HTTP_LOG_DEBUG("[%05d] Body: \n%s\n", res->session_id(),
+                         res->reqwest().body().c_str());
 
           route_info.handler(res);
           return;
