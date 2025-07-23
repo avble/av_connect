@@ -1040,7 +1040,6 @@ public:
         enter_waiting_for_close_state();
         handle_error();
       }
-      printf("[DEBUG] state: %d\n", state);
       on_write(ec, size);
     };
 
